@@ -6,7 +6,6 @@ import ReportEdit from "./Reports/ReportEdit";
 import ReportDelete from "./Reports/ReportDelete";
 import ReportDownload from "./Reports/ReportDownload";
 import ReportShow from "./Reports/ReportShow";
-import unitTemplates from "./UnitTemplates";
 import Header from "./Header";
 import history from "../history";
 
@@ -24,11 +23,7 @@ const App = () => {
           <Route path="/reports/delete/:id" exact component={ReportDelete} />
           <Route path="/reports/download" exact component={ReportDownload} />
           <Route path="/reports/show" exact component={ReportShow} />
-          <Route
-            path="/reports/unitTemplates"
-            exact
-            component={unitTemplates}
-          />
+
           {/* I might add another path for ReportShow in the future */}
         </div>
       </Router>

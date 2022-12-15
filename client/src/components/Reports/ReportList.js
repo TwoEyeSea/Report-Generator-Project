@@ -48,13 +48,6 @@ class ReportList extends React.Component {
                 {/*link will eventually lead to ReportShow component*/}
                 {report.userId}
                 <div className="description">{report.description}</div>
-                {/* =============================TEST CODE */}
-                {/* <div className="description">
-                {report?.trialPits?.map((tp) => {
-                  if (tp.finalDepth === 120) { return <p>{tp.groundWaterLevel}</p> }
-                })}
-              </div> */}
-                {/* =============================TEST CODE */}
               </Link>
             </div>
           </div>
@@ -62,7 +55,6 @@ class ReportList extends React.Component {
       }
     });
   }
-
 
   // Helper function to render the "Create New Report" button
   renderCreate = () => {
@@ -98,4 +90,3 @@ const mapStateToProps = (state) => {
 };
 
 export default connect(mapStateToProps, { fetchReports })(ReportList);
-

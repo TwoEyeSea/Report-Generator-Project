@@ -3,9 +3,10 @@ import { connect } from "react-redux";
 import { Field, Form } from "react-final-form";
 import arrayMutators from "final-form-arrays";
 import { FieldArray } from "react-final-form-arrays";
-import { fetchUnits } from "../../actions"
+import { fetchUnits } from "../../actions";
 import { Link } from "react-router-dom";
-import DropdownExampleClearable from "../semantic-ui-components/dropdown";
+import DropdownExample from "../semantic-ui-components/dropdown";
+import _ from "lodash";
 
 import "../form.css";
 
@@ -13,7 +14,6 @@ class ReportForm extends React.Component {
   componentDidMount() {
     this.props.fetchUnits();
   }
-
 
   // Error Validation for the input fields, if the input field becomes touched but is left empty the component throws an error.
   renderError = ({ error, touched }) => {
@@ -43,9 +43,22 @@ class ReportForm extends React.Component {
     );
   };
 
+  // Helper function to extract values from the dropdown component
+  // handledropdown is invoked via the onChange function within the dropdown component and is asynchronous, in order to get updated state from it we need to pass it a callback function.
+  handleDropdown = (event, data) => {
+    this.setState(
+      {
+        [data.name]: data.value,
+      },
+      () => {
+        console.log(this.state.unitDescription);
+      }
+    );
+  };
+
   onSubmit = (formValues) => {
     this.props.onSubmit(formValues);
-    // The StreamForm component will receive an onSubmmit function from its parent component as a prop.
+    // The ReportForm component will receive an onSubmmit function from its parent component as a prop.
   };
 
   render() {
@@ -79,7 +92,11 @@ class ReportForm extends React.Component {
           values,
         }) => (
           <form onSubmit={handleSubmit} className="ui form error">
-            <Field name="title" component={this.renderInput} label={"Enter Title"} />
+            <Field
+              name="title"
+              component={this.renderInput}
+              label={"Enter Title"}
+            />
             <Field
               name="description"
               component={this.renderInput}
@@ -100,7 +117,7 @@ class ReportForm extends React.Component {
               >
                 Remove Remove a Unit Description
               </button>
-              <DropdownExampleClearable />
+              <DropdownExample handleDropdown={this.handleDropdown} />
               {/* Skeleton functionality of this component is successful. need to mapp the unit Strata values to the dropdown list items */}
             </div>
 
@@ -228,12 +245,12 @@ class ReportForm extends React.Component {
       />
     );
   }
-};
+}
 const mapStateToProps = (state) => {
   return {
-    units: Object.values(state.units)
-  }
-}
+    units: Object.values(state.units),
+  };
+};
 
 export default connect(mapStateToProps, { fetchUnits })(ReportForm);
 
