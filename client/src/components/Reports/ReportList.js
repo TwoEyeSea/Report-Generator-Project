@@ -46,7 +46,8 @@ class ReportList extends React.Component {
               <Link to={`/reports/${report._id}`}>
                 {" "}
                 {/*link will eventually lead to ReportShow component*/}
-                {report.userId}
+                {/*How to display nested array data */}
+                {report.trialPits.map((r) => r.groundWaterLevel)}{" "}
                 <div className="description">{report.description}</div>
               </Link>
             </div>

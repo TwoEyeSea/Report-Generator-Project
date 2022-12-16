@@ -45,13 +45,14 @@ class ReportForm extends React.Component {
 
   // Helper function to extract values from the dropdown component
   // handledropdown is invoked via the onChange function within the dropdown component and is asynchronous, in order to get updated state from it we need to pass it a callback function.
+
   handleDropdown = (event, data) => {
     this.setState(
       {
         [data.name]: data.value,
       },
       () => {
-        console.log(this.state.unitDescription);
+        console.log(this.props.units);
       }
     );
   };
@@ -66,7 +67,9 @@ class ReportForm extends React.Component {
       <Form // Important note, the name for the form fields need to be identical to the terms in the schema for data to be posted properly. The field names need to be === to the names defined in validation as well.
         initialValues={this.props.initialValues}
         onSubmit={this.onSubmit}
-        mutators={{ ...arrayMutators }}
+        mutators={{
+          ...arrayMutators,
+        }}
         validate={(formValues) => {
           const errors = {};
 
@@ -102,6 +105,7 @@ class ReportForm extends React.Component {
               component={this.renderInput}
               label={"Enter Description"}
             />
+
             <div>
               <button
                 className="small ui button brown"
@@ -113,11 +117,27 @@ class ReportForm extends React.Component {
               <button
                 className="small ui button brown"
                 type="button"
+                onClick={() =>
+                  push(
+                    "unitDescriptions",
+                    this.props.units[0]
+                    // this.props.units[1]
+                  )
+                }
+              >
+                another
+              </button>
+              <button
+                className="small ui button brown"
+                type="button"
                 onClick={() => pop("unitDescriptions")}
               >
                 Remove Remove a Unit Description
               </button>
-              <DropdownExample handleDropdown={this.handleDropdown} />
+              <DropdownExample
+                handleDropdown={this.handleDropdown}
+                onClick={() => push("unitDescriptions", undefined)}
+              />
               {/* Skeleton functionality of this component is successful. need to mapp the unit Strata values to the dropdown list items */}
             </div>
 
@@ -129,35 +149,35 @@ class ReportForm extends React.Component {
                     {/*Incrementing the customer#*/}
                     <div className="field">
                       <Field
-                        name={`${name}.Strata`}
+                        name={`${name}.strata`}
                         component="input"
                         placeholder="Define the Stratum / Subsurface Unit."
                       />
                     </div>
                     <div className="field">
                       <Field
-                        name={`${name}.NumberOfTrialPits`}
+                        name={`${name}.numberOfTrialPits`}
                         component="input"
                         placeholder="Trial pits where this unit was encountered (e.g. 1, 2, 3)."
                       />
                     </div>
                     <div className="field">
                       <Field
-                        name={`${name}.ThicknessRange`}
+                        name={`${name}.thicknessRange`}
                         component="input"
                         placeholder='State which unit this unit underlies or state "On grade". '
                       />
                     </div>
                     <div className="field">
                       <Field
-                        name={`${name}.Underlying`}
+                        name={`${name}.underlying`}
                         component="input"
                         placeholder='State which unit this unit underlies or state "On grade". '
                       />
                     </div>
                     <div className="field">
                       <Field
-                        name={`${name}.Description`}
+                        name={`${name}.description`}
                         component="input"
                         placeholder="Provide a description for the unit."
                       />

@@ -3,11 +3,11 @@ const Schema = mongoose.Schema; //
 
 //Schema for Unit Description
 const UnitDescriptionSchema = new Schema({
-  Strata: String,
-  NumberOfTrialPits: String,
-  ThicknessRange: String,
-  Underlying: String,
-  Description: String,
+  strata: String,
+  numberOfTrialPits: String,
+  thicknessRange: String,
+  underlying: String,
+  description: String,
 });
 
 // Schema for Trial Pits
