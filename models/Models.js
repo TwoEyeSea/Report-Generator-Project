@@ -20,8 +20,16 @@ const TrialPitSchema = new Schema({
 // Schema for Reports Collection
 const ReportSchema = new Schema({
   userId: String, // The userId is too large to be stored with a type of "Number" MongoDB Number integer overflow occurs after 17 integers and replaces subsequent integers with "0"
-  title: String, //String is shorhand for {type: string}
-  description: String,
+  reportId: Number, //String is shorhand for {type: string}
+  clientName: String,
+  block: String,
+  parcel: String,
+  siteAddress: String,
+  investigationDate: String,
+  engineerAMR: String,
+  weather: String,
+  investigationDuration: String,
+  trialPitNumber: Number,
   date: {
     type: String,
     default: Date.now(),

@@ -73,13 +73,13 @@ class ReportForm extends React.Component {
         validate={(formValues) => {
           const errors = {};
 
-          if (!formValues.title) {
-            errors.title = "You must enter a title";
+          if (!formValues.reportId) {
+            errors.reportId = "You must enter a report number";
             // CONSIDER - Since i'll have many input fields it may be more efficient to pass the "name" of each input field programatically instead of hard coding each error type. using an or statement or switch and case to cycle through input field titles.
           }
 
-          if (!formValues.description) {
-            errors.description = "You must enter a description";
+          if (!formValues.clientName) {
+            errors.clientName = "You must enter a client name";
           }
 
           return errors;
@@ -96,14 +96,54 @@ class ReportForm extends React.Component {
         }) => (
           <form onSubmit={handleSubmit} className="ui form error">
             <Field
-              name="title"
+              name="reportId"
               component={this.renderInput}
-              label={"Enter Title"}
+              label={"Enter Report Number (as number)"}
             />
             <Field
-              name="description"
+              name="clientName"
               component={this.renderInput}
-              label={"Enter Description"}
+              label={"Enter Client Name"}
+            />
+            <Field
+              name="block"
+              component={this.renderInput}
+              label={"Enter Site Location Block"}
+            />
+            <Field
+              name="parcel"
+              component={this.renderInput}
+              label={"Enter Site Location Parcel"}
+            />
+            <Field
+              name="siteAddress"
+              component={this.renderInput}
+              label={"Enter Site Address"}
+            />
+            <Field
+              name="investigationDate"
+              component={this.renderInput}
+              label={"Enter Date of Investigation"}
+            />
+            <Field
+              name="engineerAMR"
+              component={this.renderInput}
+              label={"Enter Engineers Present"}
+            />
+            <Field
+              name="weather"
+              component={this.renderInput}
+              label={"Enter Weather Conditions During Investigation"}
+            />
+            <Field
+              name="investigationDuration"
+              component={this.renderInput}
+              label={"Enter Duration of Investigation"}
+            />
+            <Field
+              name="trialPitNumber"
+              component={this.renderInput}
+              label={"Enter Number of Trial Pits Excavated"}
             />
 
             <div>
@@ -117,13 +157,7 @@ class ReportForm extends React.Component {
               <button
                 className="small ui button brown"
                 type="button"
-                onClick={() =>
-                  push(
-                    "unitDescriptions",
-                    this.props.units[0]
-                    // this.props.units[1]
-                  )
-                }
+                onClick={() => push("unitDescriptions", this.props.units[0])}
               >
                 another
               </button>
@@ -134,11 +168,6 @@ class ReportForm extends React.Component {
               >
                 Remove Remove a Unit Description
               </button>
-              <DropdownExample
-                handleDropdown={this.handleDropdown}
-                onClick={() => push("unitDescriptions", undefined)}
-              />
-              {/* Skeleton functionality of this component is successful. need to mapp the unit Strata values to the dropdown list items */}
             </div>
 
             <FieldArray name="unitDescriptions">
@@ -178,7 +207,7 @@ class ReportForm extends React.Component {
                     <div className="field">
                       <Field
                         name={`${name}.description`}
-                        component="input"
+                        component="textarea"
                         placeholder="Provide a description for the unit."
                       />
                     </div>

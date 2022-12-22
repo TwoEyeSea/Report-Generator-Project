@@ -29,8 +29,16 @@ class ReportEdit extends React.Component {
           onSubmit={this.onSubmit}
           initialValues={_.pick(
             this.props.report,
-            "title",
-            "description",
+            "userId",
+            "reportId",
+            "clientName",
+            "blockAndParcel",
+            "siteAddress",
+            "investigationDate",
+            "engineerAMR",
+            "weather",
+            "investigationDuration",
+            "trialPitNumber",
             "unitDescriptions",
             "trialPits"
           )}

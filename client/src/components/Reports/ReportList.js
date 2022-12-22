@@ -47,8 +47,12 @@ class ReportList extends React.Component {
                 {" "}
                 {/*link will eventually lead to ReportShow component*/}
                 {/*How to display nested array data */}
-                {report.trialPits.map((r) => r.groundWaterLevel)}{" "}
-                <div className="description">{report.description}</div>
+                {/* {report.trialPits.map((r) => r.groundWaterLevel)}{" "} */}
+                AMR:{report.reportId} | Client: {report.clientName}
+                <div className="description">
+                  BLOCK: {report.block} PARCEL(S) {report.parcel},{" "}
+                  {report.siteAddress.toUpperCase()}
+                </div>
               </Link>
             </div>
           </div>
