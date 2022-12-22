@@ -213,6 +213,7 @@ class ReportForm extends React.Component {
                     </div>
                     <div className="ui right floated large basic icon buttons">
                       <button
+                        type="button"
                         className="ui button space"
                         onClick={() => fields.remove(index)}
                         style={{ curson: "pointer" }}
@@ -273,7 +274,8 @@ class ReportForm extends React.Component {
                       </div>
                       <div className="ui right floated large basic icon buttons">
                         <button
-                          className="ui button"
+                          type="button"
+                          className="ui button space"
                           onClick={() => fields.remove(index)}
                           style={{ curson: "pointer" }}
                         >

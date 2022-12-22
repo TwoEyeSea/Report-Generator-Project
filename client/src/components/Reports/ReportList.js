@@ -9,10 +9,6 @@ class ReportList extends React.Component {
     // retrieves all the required data for the reports into our state on mounting the component
   }
 
-  // Helper function to render data from the db.js file into jsx elements for the reportList component
-  // * NB * If the db.json file isn't structured properly the renderList() helper function will not render the list properly.
-  // It is important to test that the CreateReport() commponent is posting the db.json elements properly. You may have to delete previous elements if they corrupt the db.json file.
-
   renderAdmin = (report) => {
     if (!report.userId) {
       return;
@@ -34,6 +30,9 @@ class ReportList extends React.Component {
     return;
   };
 
+  // Helper function to render data from the db.js file into jsx elements for the reportList component
+  // * NB * If the db.json file isn't structured properly the renderList() helper function will not render the list properly.
+  // It is important to test that the CreateReport() commponent is posting the db.json elements properly. You may have to delete previous elements if they corrupt the db.json file.
   renderList() {
     return this.props.reports.map((report) => {
       // This if statement is currently being used to exclude the res.json message from being displayed within the list of reports. the res.json message is requrired to complete
@@ -43,7 +42,7 @@ class ReportList extends React.Component {
             {this.renderAdmin(report)}
             <i className="large middle aligned icon file alternate outline" />
             <div className="content">
-              <Link to={`/reports/${report._id}`}>
+              <Link to={`/reports/show/${report._id}`}>
                 {" "}
                 {/*link will eventually lead to ReportShow component*/}
                 {/*How to display nested array data */}

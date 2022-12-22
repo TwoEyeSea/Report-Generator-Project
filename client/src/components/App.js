@@ -22,8 +22,7 @@ const App = () => {
           {/* Wildcard variables ":id" used - anthing after the colon is treated as a variable and we can specify any number of these wildcard variables */}
           <Route path="/reports/delete/:id" exact component={ReportDelete} />
           <Route path="/reports/download" exact component={ReportDownload} />
-          <Route path="/reports/show" exact component={ReportShow} />
-
+          <Route path="/reports/show/:id" exact component={ReportShow} />
           {/* I might add another path for ReportShow in the future */}
         </div>
       </Router>
