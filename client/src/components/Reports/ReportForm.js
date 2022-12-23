@@ -194,7 +194,7 @@ class ReportForm extends React.Component {
                       <Field
                         name={`${name}.thicknessRange`}
                         component="input"
-                        placeholder='State which unit this unit underlies or state "On grade". '
+                        placeholder='State the thickness range of this unit". '
                       />
                     </div>
                     <div className="field">

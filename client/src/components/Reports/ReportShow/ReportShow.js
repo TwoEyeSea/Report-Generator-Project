@@ -1,21 +1,12 @@
 import React from "react";
 import { connect } from "react-redux";
-import { fetchReport } from "../../actions/index";
+import { fetchReport } from "../../../actions/index";
+import renderUnitDescription from "./renderHelperFunctions";
 
 class ReportShow extends React.Component {
   componentDidMount() {
     this.props.fetchReport(this.props.match.params.id);
     console.log(this.props.report.reportId);
-  }
-
-  renderUnitDescription() {
-    return this.props.report.unitDescriptions.map((u) => {
-      return (
-        <>
-          <p>{u.strata}</p>
-        </>
-      );
-    });
   }
 
   render() {
@@ -40,7 +31,6 @@ class ReportShow extends React.Component {
       <>
         <p>
           {/* Sandbox Code to test if I can iterate over the unitDescriptions array within the report */}
-          {this.renderUnitDescription()}
           <meta
             httpEquiv="Content-Type"
             content="text/html; charset=windows-1252"
@@ -266,6 +256,7 @@ class ReportShow extends React.Component {
               &nbsp;
             </span>
           </p>
+          {renderUnitDescription(this.props.report.unitDescriptions)}
           {/* <p
             className={21}
             align="left"

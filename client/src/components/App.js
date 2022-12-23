@@ -5,7 +5,7 @@ import ReportList from "./Reports/ReportList";
 import ReportEdit from "./Reports/ReportEdit";
 import ReportDelete from "./Reports/ReportDelete";
 import ReportDownload from "./Reports/ReportDownload";
-import ReportShow from "./Reports/ReportShow";
+import ReportShow from "./Reports/ReportShow/ReportShow";
 import Header from "./Header";
 import history from "../history";
 
