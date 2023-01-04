@@ -36,6 +36,8 @@ const ReportSchema = new Schema({
   },
   unitDescriptions: [UnitDescriptionSchema],
   trialPits: [TrialPitSchema],
+  pitBase: String,
+  endStratum: String,
 });
 
 // Schema for Unit Descriptions COllection

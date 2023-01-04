@@ -172,3 +172,7 @@ export const trialPitTable = (trialPit) => {
     );
   }
 };
+
+// export const renderGeoSetting = () => {
+// switch (strat)
+// }

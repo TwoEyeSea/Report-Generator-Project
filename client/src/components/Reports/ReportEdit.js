@@ -41,7 +41,9 @@ class ReportEdit extends React.Component {
             "investigationDuration",
             "trialPitNumber",
             "unitDescriptions",
-            "trialPits"
+            "trialPits",
+            "pitBase",
+            "endStratum"
           )}
         />
       </div>

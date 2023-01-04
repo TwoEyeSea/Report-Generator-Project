@@ -8,6 +8,7 @@ import _ from "lodash";
 
 import "../form.css";
 
+// Condition components are used in substiture of Field components to conditionally render certain input fields based on selected data.
 const Condition = ({ when, is, children }) => (
   <Field name={when} subscription={{ value: true }}>
     {({ input: { value } }) => (value === is ? children : null)}
@@ -16,10 +17,8 @@ const Condition = ({ when, is, children }) => (
 
 const ReportForm = (props) => {
   const [units, setUnits] = useState("no units");
-  // constcomponentDidMount() {
-  //   this.props.fetchUnits();
-  // }
 
+  //the useEffect hook is used in substitute of componentDidMount in a class based component
   useEffect(() => {
     setUnits(props.fetchUnits());
   }, []);
@@ -98,24 +97,12 @@ const ReportForm = (props) => {
             label={"Enter Report Number (as number)"}
           />
 
-          {/* conditional input field test */}
-          <div>
-            <label>
-              <Field
-                name="reception"
-                component="input"
-                type="radio"
-                value="delivery"
-              />{" "}
-              Delivery
-            </label>
-          </div>
-          <Condition when="reception" is="delivery">
-            <div>
-              <label>"Enter Client Name"</label>
-              <Field name="clientName" component={renderInput} type="text" />
-            </div>
-          </Condition>
+          <Field
+            name="clientName"
+            component={renderInput}
+            type="text"
+            label={"Enter Client Name"}
+          />
 
           <Field
             name="block"
@@ -157,6 +144,82 @@ const ReportForm = (props) => {
             component={renderInput}
             label={"Enter Number of Trial Pits Excavated"}
           />
+
+          {/* conditional input field test */}
+          <div>
+            {/* If you add multiple radio buttons to the same dive the react-final-form library will unselect a previously selected button when another is selected */}
+            <label>
+              <Field
+                name="pitBase"
+                component="input"
+                type="radio"
+                value="bedrockTrue"
+              />{" "}
+              Was encountered
+            </label>
+            <label>
+              <Field
+                name="pitBase"
+                component="input"
+                type="radio"
+                value="bedrockFalse"
+              />{" "}
+              Was not encountered
+            </label>
+          </div>
+          <Condition when="pitBase" is="bedrockTrue">
+            <div>
+              <label>
+                <Field
+                  name="endStratum"
+                  component="input"
+                  type="radio"
+                  value="Cayman"
+                />{" "}
+                Cayman Formation
+              </label>
+              <label>
+                <Field
+                  name="endStratum"
+                  component="input"
+                  type="radio"
+                  value="Pedro"
+                />{" "}
+                Pedro Castle Formation
+              </label>
+            </div>
+          </Condition>
+          <Condition when="pitBase" is="bedrockFalse">
+            <div>
+              <label>
+                <Field
+                  name="endStratum"
+                  component="input"
+                  type="radio"
+                  value="sand"
+                />{" "}
+                Sand
+              </label>
+            </div>
+            <label>
+              <Field
+                name="endStratum"
+                component="input"
+                type="radio"
+                value="peat"
+              />{" "}
+              Peat
+            </label>
+            <label>
+              <Field
+                name="endStratum"
+                component="input"
+                type="radio"
+                value="marl"
+              />{" "}
+              Marl
+            </label>
+          </Condition>
 
           <div>
             <button
