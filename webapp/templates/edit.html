@@ -68,12 +68,10 @@
         return;
       }
       const data = await response.json();
-      data.image_urls.forEach((url, i) => {
-        const img = document.getElementById(`pit-image-${i}`);
-        if (img) {
-          img.src = url;
-        }
-      });
+      const img = document.getElementById(`pit-image-${data.pit_index}`);
+      if (img) {
+        img.src = data.image_url;
+      }
     }
   </script>
 </body>

@@ -118,7 +118,8 @@ def test_edit_update_changes_description_and_returns_new_previews(client, tmp_pa
     )
     assert response.status_code == 200
     body = response.get_json()
-    assert len(body["image_urls"]) == 2
+    assert body["pit_index"] == 0
+    assert "image_url" in body
 
     project_data = json.loads((OUTPUTS_DIR / job_id / "project.json").read_text())
     assert project_data["pits"][0]["layers"][0]["description"] == "A freshly edited description."

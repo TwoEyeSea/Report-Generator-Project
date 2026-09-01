@@ -29,11 +29,12 @@ import uuid
 from pathlib import Path
 
 import pymupdf
+import pypdf
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
 
 from tp_drawer.catalog import UnitTemplate, hydrate_descriptions, load_catalog, save_catalog
 from tp_drawer.config import Config
-from tp_drawer.drawing import render_hatch_swatch, render_project
+from tp_drawer.drawing import compute_project_scale, render_hatch_swatch, render_pit_pdf
 from tp_drawer.excel_io import read_project, write_template
 from tp_drawer.hatch_patterns import PATTERN_REGISTRY
 from tp_drawer.models import Project, project_from_dict, project_to_dict
@@ -107,26 +108,59 @@ def _save_project(job_dir: Path, project: Project) -> None:
     (job_dir / "project.json").write_text(json.dumps(project_to_dict(project)))
 
 
-def _render_and_rasterize(job_dir: Path, project: Project) -> None:
-    """Regenerate this job's downloadable PDF and its per-page preview
-    images. Called every time the underlying project data changes (right
-    after upload, and again after every live description edit) so the
-    browser preview always reflects the latest edits.
+def _pit_pdf_path(job_dir: Path, pit_index: int) -> Path:
+    """Where one pit's own single-page PDF lives within its job folder --
+    an internal working file (never served to the browser directly, see
+    _OUTPUT_FILENAME_RE above) that _rebuild_combined_pdf reads back to
+    reassemble log.pdf without re-drawing anything."""
+    return job_dir / f"pit_{pit_index}.pdf"
 
-    render_project (from tp_drawer.drawing) produces the real PDF;
-    pymupdf.open then re-opens that same PDF just to convert each of its
-    pages into a plain PNG image (`page.get_pixmap` "rasterizes" the page
-    -- turns its vector shapes into a plain grid of pixels, the same way
-    a screenshot would), because a web page can display a PNG with a
-    plain `<img>` tag but can't easily show a live-updating PDF page
-    inline the same way."""
-    pdf_path = job_dir / "log.pdf"
-    render_project(project, pdf_path, Config(), templates=load_catalog())
+
+def _render_and_rasterize_pit(job_dir: Path, project: Project, scale: float, templates: list[UnitTemplate], pit_index: int) -> None:
+    """Regenerate exactly one pit's own PDF page and PNG preview -- the
+    only rendering work a single description edit actually needs, since
+    editing one layer's text can only ever change that one pit's page.
+
+    render_pit_pdf (from tp_drawer.drawing) draws just this pit; pymupdf
+    then re-rasterizes that one-page PDF into a plain PNG image the same
+    way the old whole-project version did, just for one page instead of
+    every page (see render_pit_pdf's own docstring for why re-drawing
+    every other pit here would be wasted work)."""
+    pit = project.pits[pit_index]
+    pdf_path = _pit_pdf_path(job_dir, pit_index)
+    render_pit_pdf(project, pit, Config(), scale, templates, pdf_path)
     doc = pymupdf.open(pdf_path)
-    for i, page in enumerate(doc):
-        pix = page.get_pixmap(dpi=_PREVIEW_DPI)
-        pix.save(job_dir / f"pit_{i}.png")
+    doc[0].get_pixmap(dpi=_PREVIEW_DPI).save(job_dir / f"pit_{pit_index}.png")
     doc.close()
+
+
+def _rebuild_combined_pdf(job_dir: Path, project: Project) -> None:
+    """Reassemble the downloadable log.pdf out of every pit's own already-
+    rendered single-page PDF (see _pit_pdf_path above). pypdf.PdfWriter
+    here only ever copies each page's already-finished content across --
+    it never re-draws anything -- so rebuilding the combined file after a
+    single-pit edit stays cheap no matter how many pits the project has,
+    unlike calling render_project again (which redraws every pit from
+    scratch) would be."""
+    writer = pypdf.PdfWriter()
+    for i in range(len(project.pits)):
+        reader = pypdf.PdfReader(_pit_pdf_path(job_dir, i))
+        writer.add_page(reader.pages[0])
+    with open(job_dir / "log.pdf", "wb") as f:
+        writer.write(f)
+
+
+def _render_and_rasterize_all(job_dir: Path, project: Project) -> None:
+    """Full render of every pit -- used only right after a workbook is
+    first uploaded, when every pit genuinely needs drawing at least once
+    (there's no previous render anything could be reused from). Every
+    later edit goes through _render_and_rasterize_pit instead, which only
+    re-draws the one pit that actually changed."""
+    templates = load_catalog()
+    scale = compute_project_scale(project)
+    for i in range(len(project.pits)):
+        _render_and_rasterize_pit(job_dir, project, scale, templates, i)
+    _rebuild_combined_pdf(job_dir, project)
 
 
 @app.route("/")
@@ -190,7 +224,7 @@ def generate():
     hydrate_descriptions(project, load_catalog())
 
     _save_project(job_dir, project)
-    _render_and_rasterize(job_dir, project)
+    _render_and_rasterize_all(job_dir, project)
 
     # redirect(...) sends the browser's next request to a different URL
     # -- here, on to the newly created job's edit page -- rather than
@@ -236,8 +270,9 @@ def edit_update(job_id: str):
     """Called by the edit page's JavaScript (via a background fetch, not
     a full page reload) every time the user pauses after editing a
     description box -- updates just that one layer's text, regenerates
-    the PDF and preview images, and returns the new preview image URLs
-    for the page to swap in live.
+    only that one pit's PDF page and preview image (see
+    _render_and_rasterize_pit), and returns that one new preview image's
+    URL for the page to swap in live.
 
     request.get_json(silent=True) parses the request body as JSON;
     silent=True means a malformed body returns None instead of raising an
@@ -270,9 +305,17 @@ def edit_update(job_id: str):
         return jsonify({"error": "Unknown pit or layer index."}), 400
 
     _save_project(job_dir, project)
-    _render_and_rasterize(job_dir, project)
+    # Only the edited pit's own page actually changed, so only it needs
+    # re-rendering -- see _render_and_rasterize_pit's docstring. log.pdf
+    # (the downloadable file) still needs to reflect the edit, but
+    # _rebuild_combined_pdf does that by re-copying every pit's already-
+    # rendered page rather than re-drawing any of them.
+    templates = load_catalog()
+    scale = compute_project_scale(project)
+    _render_and_rasterize_pit(job_dir, project, scale, templates, pit_index)
+    _rebuild_combined_pdf(job_dir, project)
 
-    # Appending a `?v=<timestamp>` query string to each image URL is a
+    # Appending a `?v=<timestamp>` query string to the image URL is a
     # classic "cache-busting" trick: browsers aggressively cache images
     # by URL, so simply re-requesting "pit_0.png" after it's changed on
     # the server could show the browser's old cached copy instead of the
@@ -280,8 +323,8 @@ def edit_update(job_id: str):
     # time, the URL as a whole looks brand new to the browser's cache,
     # forcing it to fetch the actual latest image.
     cache_bust = int(time.time() * 1000)
-    image_urls = [f"{url_for('job_file', job_id=job_id, filename=f'pit_{i}.png')}?v={cache_bust}" for i in range(len(project.pits))]
-    return jsonify({"image_urls": image_urls})
+    image_url = f"{url_for('job_file', job_id=job_id, filename=f'pit_{pit_index}.png')}?v={cache_bust}"
+    return jsonify({"pit_index": pit_index, "image_url": image_url})
 
 
 @app.route("/outputs/<job_id>/<filename>")

@@ -26,6 +26,7 @@ read it in file order.
 import math
 import textwrap
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 
 import matplotlib
@@ -784,11 +785,23 @@ def _draw_general_notes(ax, project: Project, pit: TrialPit) -> None:
     )
 
 
+@lru_cache(maxsize=8)
 def _load_rgb_image(path: Path) -> np.ndarray:
     """Load an image as RGB, converting CMYK source files (common from Adobe export
     tools) via their embedded ICC profile rather than letting matplotlib misread the
     raw C/M/Y/K channels as R/G/B/A -- that reinterpretation is what made the AMR logo
     render washed-out and under-saturated.
+
+    @lru_cache means this whole function only actually runs once per
+    distinct `path` -- every later call with that same path returns the
+    same already-decoded array straight from memory instead of re-reading
+    the file and redoing the CMYK->sRGB conversion. This matters because
+    render_pit_page calls this once per *pit*, so a project with many pits
+    would otherwise pay this cost (a disk read plus an ICC profile
+    transform) again for every single pit, on every single render -- pure
+    repeated work, since the logo file never changes mid-run. Safe to
+    share the same cached array across every caller because nothing here
+    ever modifies it after loading (ax.imshow only ever reads it).
     """
     img = Image.open(path)
     if img.mode == "CMYK":
@@ -920,6 +933,46 @@ def render_pit_page(fig, ax, project: Project, pit: TrialPit, cfg: Config, scale
     _draw_title_block(ax, project, pit, cfg)
 
 
+def compute_project_scale(project: Project) -> float:
+    """The one shared scale every pit's page must be drawn at (see
+    layout.py's compute_scale): whichever pit is deepest decides it, so
+    every pit's column ends up visually comparable on the same true-to-
+    life scale. Pulled out of render_project into its own function so a
+    caller that renders one pit's page at a time -- render_pit_pdf below,
+    used by the webapp's live-edit preview -- can compute this same
+    whole-project value without duplicating the "deepest pit wins"
+    logic, and without needing to actually render every other pit first."""
+    max_depth = max((pit.total_depth_in for pit in project.pits), default=Decimal(0))
+    return compute_scale(max_depth, COLUMN_HEIGHT_BUDGET)
+
+
+def render_pit_pdf(
+    project: Project, pit: TrialPit, cfg: Config, scale: float,
+    templates: list[UnitTemplate], output_path: str | Path,
+) -> None:
+    """Render exactly one pit's page to its own single-page PDF file --
+    everything render_project's per-pit loop does for one iteration, but
+    standalone rather than appended into one shared multi-page PDF.
+
+    This exists for the webapp's live-edit preview: editing one unit's
+    description only ever changes that one pit's own page, so re-drawing
+    every other pit too (which is what calling render_project again would
+    do) is pure wasted work that gets slower the more pits a project has.
+    Rendering just the changed pit here, then merging pre-rendered pages
+    back into the combined PDF (see webapp/app.py), keeps a live edit's
+    cost independent of how many other pits exist.
+
+    `scale` must be the same value used for every other pit in the
+    project (see compute_project_scale above) -- passing it in rather
+    than recomputing it here is what keeps this pit's column drawn at the
+    same scale as its neighbors, even though this function never looks at
+    those neighbors itself."""
+    fig, ax = _new_axes(cfg)
+    render_pit_page(fig, ax, project, pit, cfg, scale, templates)
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
 def render_project(
     project: Project,
     output_path: str | Path,
@@ -947,8 +1000,7 @@ def render_project(
     # compute_scale) so depths are visually comparable across pits --
     # that's why the scale is computed once here, from whichever pit is
     # deepest, rather than separately inside the per-pit loop below.
-    max_depth = max((pit.total_depth_in for pit in project.pits), default=Decimal(0))
-    scale = compute_scale(max_depth, COLUMN_HEIGHT_BUDGET)
+    scale = compute_project_scale(project)
     # ADVANCED TECHNIQUE -- a context manager (the `with` statement):
     # PdfPages manages a single open PDF file that pages get appended to
     # one at a time. Using `with PdfPages(output_path) as pdf:` guarantees
