@@ -1,0 +1,29 @@
+[
+  {
+    "name": "ORGANIC TOPSOIL",
+    "description": "Loose brown, dark-brown, organic topsoil. Loose compressible organic silt (\u22640.002\u201d) soil with inclusions of vegetation and roots. Uniformly graded compressible organic silt is not suitable for bearing, and not suitable for use within the ground-filling profile. Suitable for agricultural and landscaping use.",
+    "hatch_pattern": "none",
+    "hatch_angle": 0.0,
+    "hatch_size": 1.0,
+    "background_color": "none",
+    "line_color": "black"
+  },
+  {
+    "name": "Beach Sand",
+    "description": "",
+    "hatch_pattern": "dots",
+    "hatch_angle": 0.0,
+    "hatch_size": 0.5,
+    "background_color": "#f0c85c",
+    "line_color": "#000000"
+  },
+  {
+    "name": "Cayman Rock",
+    "description": "test",
+    "hatch_pattern": "circles",
+    "hatch_angle": 0.0,
+    "hatch_size": 1.2,
+    "background_color": "#ffd270",
+    "line_color": "#000000"
+  }
+]

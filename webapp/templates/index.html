@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Trial Pit Log Drawer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="page">
+    <h1>Trial Pit Log Drawer</h1>
+    <p class="subtitle">Upload a filled-in input workbook to generate trial pit log sheets.</p>
+    <p><a class="link" href="{{ url_for('catalog_page') }}">Manage unit description templates &rarr;</a></p>
+
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <div class="panel">
+      <form action="{{ url_for('generate') }}" method="post" enctype="multipart/form-data">
+        <div class="field">
+          <label for="workbook">Input workbook (.xlsx)</label>
+          <input type="file" id="workbook" name="workbook" accept=".xlsx" required>
+          <span class="hint">Don't have one yet? <a class="link" href="{{ url_for('template') }}">Download a blank template</a>.</span>
+        </div>
+        <div class="actions">
+          <button type="submit">Generate</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

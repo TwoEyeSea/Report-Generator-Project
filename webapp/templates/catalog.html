@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Trial Pit Log Drawer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="page">
+    <h1>Unit description templates</h1>
+    <p class="subtitle">These populate a unit's description and hatch fill when its name matches a layer name in an uploaded workbook. Editing a description in a generated drawing never changes these templates -- the same is true of hatch styling, which is always drawn straight from here.</p>
+
+    <p><a class="link" href="{{ url_for('index') }}">&larr; Back</a></p>
+
+    {% macro hatch_fields(uid, pattern, angle, size, bg, line) %}
+      <div class="field">
+        <label>Hatch pattern</label>
+        <select name="hatch_pattern" class="hatch-pattern" data-uid="{{ uid }}">
+          {% for id, meta in pattern_registry.items() %}
+            <option value="{{ id }}" {% if id == pattern %}selected{% endif %}>{{ meta.display_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="hatch-row field">
+        <label>Angle</label>
+        <input type="number" name="hatch_angle" class="hatch-angle" data-uid="{{ uid }}" value="{{ angle }}" step="1">
+        <label>Size</label>
+        <input type="number" name="hatch_size" class="hatch-size" data-uid="{{ uid }}" value="{{ size }}" step="0.1" min="0.1">
+      </div>
+      <div class="hatch-row field">
+        <label>Background</label>
+        <input type="color" name="background_color" class="hatch-bg" data-uid="{{ uid }}" value="{{ bg if bg != 'none' else '#ffffff' }}">
+        <label>Lines</label>
+        <input type="color" name="line_color" class="hatch-line" data-uid="{{ uid }}" value="{{ line }}">
+        <label class="hatch-nofill-label">
+          <input type="checkbox" name="background_nofill" class="hatch-nofill" data-uid="{{ uid }}" {% if bg == 'none' %}checked{% endif %}>
+          No fill
+        </label>
+      </div>
+      <div class="field">
+        <img class="hatch-thumbnail" id="thumb-{{ uid }}" alt="Hatch pattern preview">
+      </div>
+    {% endmacro %}
+
+    <div class="panel">
+      <h2 class="panel-title">Add a template</h2>
+      <form action="{{ url_for('catalog_add') }}" method="post">
+        <div class="field">
+          <label for="name">Unit name</label>
+          <input type="text" id="name" name="name" required>
+        </div>
+        <div class="field">
+          <label for="description">Description</label>
+          <textarea id="description" name="description" rows="3"></textarea>
+        </div>
+        {{ hatch_fields("new", "none", 0.0, 1.0, "none", "black") }}
+        <div class="actions">
+          <button type="submit">Add</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="catalog-list">
+      {% for t in templates %}
+        <div class="panel catalog-row">
+          <form action="{{ url_for('catalog_update') }}" method="post">
+            <input type="hidden" name="index" value="{{ loop.index0 }}">
+            <div class="field">
+              <label>Unit name</label>
+              <input type="text" name="name" value="{{ t.name }}" required>
+            </div>
+            <div class="field">
+              <label>Description</label>
+              <textarea name="description" rows="3">{{ t.description }}</textarea>
+            </div>
+            {{ hatch_fields(loop.index0, t.hatch_pattern, t.hatch_angle, t.hatch_size, t.background_color, t.line_color) }}
+            <div class="actions">
+              <button type="submit">Save</button>
+            </div>
+          </form>
+          <form action="{{ url_for('catalog_delete') }}" method="post" class="delete-form">
+            <input type="hidden" name="index" value="{{ loop.index0 }}">
+            <button type="submit" class="link-button">Delete</button>
+          </form>
+        </div>
+      {% else %}
+        <p class="subtitle">No templates yet -- add one above.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <script>
+    const PATTERN_DEFAULTS = {{ pattern_registry | tojson }};
+    const debounceTimers = {};
+
+    function fieldsFor(uid) {
+      return {
+        pattern: document.querySelector(`.hatch-pattern[data-uid="${uid}"]`),
+        angle: document.querySelector(`.hatch-angle[data-uid="${uid}"]`),
+        size: document.querySelector(`.hatch-size[data-uid="${uid}"]`),
+        bg: document.querySelector(`.hatch-bg[data-uid="${uid}"]`),
+        line: document.querySelector(`.hatch-line[data-uid="${uid}"]`),
+        nofill: document.querySelector(`.hatch-nofill[data-uid="${uid}"]`),
+        thumb: document.getElementById(`thumb-${uid}`),
+      };
+    }
+
+    function refreshThumbnail(uid) {
+      const f = fieldsFor(uid);
+      const params = new URLSearchParams({
+        pattern: f.pattern.value,
+        angle: f.angle.value || "0",
+        size: f.size.value || "1",
+        bg: f.nofill.checked ? "none" : f.bg.value,
+        line: f.line.value,
+      });
+      f.thumb.src = `/catalog/swatch.png?${params.toString()}`;
+    }
+
+    const uids = new Set();
+    document.querySelectorAll("[data-uid]").forEach((el) => uids.add(el.dataset.uid));
+
+    uids.forEach((uid) => {
+      const f = fieldsFor(uid);
+      f.pattern.addEventListener("change", () => {
+        const defaults = PATTERN_DEFAULTS[f.pattern.value];
+        if (defaults) {
+          f.angle.value = defaults.default_angle;
+          f.size.value = defaults.default_size;
+        }
+        refreshThumbnail(uid);
+      });
+      [f.angle, f.size].forEach((el) => {
+        el.addEventListener("input", () => {
+          clearTimeout(debounceTimers[uid]);
+          debounceTimers[uid] = setTimeout(() => refreshThumbnail(uid), 200);
+        });
+      });
+      [f.bg, f.line, f.nofill].forEach((el) => {
+        el.addEventListener("input", () => refreshThumbnail(uid));
+      });
+      refreshThumbnail(uid);
+    });
+  </script>
+</body>
+</html>

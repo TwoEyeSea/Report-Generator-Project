@@ -1,0 +1,6 @@
+matplotlib
+openpyxl
+pytest
+pypdf
+flask
+pymupdf

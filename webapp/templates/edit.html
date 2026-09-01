@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Trial Pit Log Drawer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="page">
+    <div class="result-header">
+      <div>
+        <h1>Generated trial pit logs</h1>
+        <p class="subtitle">{{ pits|length }} trial pit(s). Edit a unit's description below and its preview updates automatically.</p>
+      </div>
+      <a class="download-button" href="{{ pdf_url }}" download>Download PDF</a>
+    </div>
+
+    <p><a class="link" href="{{ url_for('index') }}">&larr; Generate another</a></p>
+
+    <div class="pit-list">
+      {% for pit in pits %}
+        <div class="pit-card">
+          <h2>TRIAL PIT NO. {{ pit.number }}</h2>
+          <div class="pit-body">
+            <div class="description-editor">
+              {% for layer in pit.layers %}
+                <div class="field">
+                  <label>{{ layer.name }}</label>
+                  <textarea
+                    class="description-input"
+                    data-pit-index="{{ pit.pit_index }}"
+                    data-layer-index="{{ layer.layer_index }}"
+                    rows="3"
+                  >{{ layer.description }}</textarea>
+                </div>
+              {% endfor %}
+            </div>
+            <img id="pit-image-{{ pit.pit_index }}" src="{{ pit.image_url }}" alt="Trial Pit No. {{ pit.number }} preview">
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <script>
+    const jobId = {{ job_id | tojson }};
+    let debounceTimer = null;
+
+    document.querySelectorAll(".description-input").forEach((el) => {
+      el.addEventListener("input", () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => sendUpdate(el), 450);
+      });
+    });
+
+    async function sendUpdate(el) {
+      const body = {
+        pit_index: Number(el.dataset.pitIndex),
+        layer_index: Number(el.dataset.layerIndex),
+        description: el.value,
+      };
+      const response = await fetch(`/edit/${jobId}/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        return;
+      }
+      const data = await response.json();
+      data.image_urls.forEach((url, i) => {
+        const img = document.getElementById(`pit-image-${i}`);
+        if (img) {
+          img.src = url;
+        }
+      });
+    }
+  </script>
+</body>
+</html>

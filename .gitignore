@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Per-job webapp output folders (uploaded workbooks, generated PDFs/previews) --
+# runtime artifacts, not source.
+outputs/
+
+# Scratch workspace for temporary verification files -- see the project's
+# established convention of using this folder for throwaway scripts/renders.
+scratch/
+
+# Per-developer local Claude Code settings (permission allowlist etc.), not
+# shared project config.
+.claude/settings.local.json
