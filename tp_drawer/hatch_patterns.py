@@ -77,7 +77,7 @@ class Blob:
 # means "any one of LineSegment, Dot, or Blob". Writing `list[Primitive]`
 # as a return type elsewhere in this file is shorthand for
 # `list[LineSegment | Dot | Blob]`, so a function that returns a mix of
-# different shape types (like _generate_circles, which returns both Dot
+# different shape types (like _generate_gravels, which returns both Dot
 # and Blob objects) has one tidy type to declare instead of spelling the
 # whole union out every time.
 Primitive = LineSegment | Dot | Blob
@@ -114,12 +114,12 @@ _CONTACT_OVERLAP_FRACTION = 0.2
 # Largest a single grain's *desired* radius can be, as a fraction of `spacing` -- the top tier of
 # _pebble_radius. Also sizes the packer's spatial-hash buckets and bounds how far contact overlap
 # can reach, so both stay correct if that tier's range is retuned.
-_MAX_GRAIN_FRACTION = 0.6
+_MAX_GRAIN_FRACTION = 0.5
 
 # Radius (as a fraction of `spacing`) above which a placed grain counts as a "large" host for the
 # perimeter-contact pass -- also the floor of _pebble_radius's large tier, so "large" means the
 # same thing everywhere in this file.
-_LARGE_GRAIN_THRESHOLD_FRACTION = 0.50
+_LARGE_GRAIN_THRESHOLD_FRACTION = 0.30
 
 # Radius (as a fraction of `spacing`) below which a placed grain is skipped by the perimeter pass
 # entirely. These are filler-tier grains that are already dense from the base grid pass; forcing
@@ -175,16 +175,26 @@ def _grid_centers(width: float, height: float, spacing: float, u, v) -> list[tup
     caller in drawing.py clips away anything that spills outside the
     band's actual boundary anyway.
     """
-    if spacing <= 0:
+    return _grid_centers_xy(width, height, spacing, spacing, u, v)
+
+
+def _grid_centers_xy(width: float, height: float, spacing_u: float, spacing_v: float, u, v) -> list[tuple[float, float]]:
+    """Like _grid_centers, but with independent spacing along u (columns) and v
+    (rows) -- for a pattern whose repeat unit isn't square, e.g. organic_frond's
+    fan, which is laterally wider than it is tall. _grid_centers itself is just
+    this with spacing_u == spacing_v, so the square-grid patterns (dots,
+    organic ticks, ...) share the exact same tiling math as this one."""
+    if spacing_u <= 0 or spacing_v <= 0:
         return []
     cx, cy = width / 2, height / 2
     half_diag = math.hypot(width, height) / 2
-    n = int(half_diag / spacing) + 2
+    n_u = int(half_diag / spacing_u) + 2
+    n_v = int(half_diag / spacing_v) + 2
     centers = []
-    for i in range(-n, n + 1):
-        for j in range(-n, n + 1):
-            x = cx + i * spacing * u[0] + j * spacing * v[0]
-            y = cy + i * spacing * u[1] + j * spacing * v[1]
+    for i in range(-n_u, n_u + 1):
+        for j in range(-n_v, n_v + 1):
+            x = cx + i * spacing_u * u[0] + j * spacing_v * v[0]
+            y = cy + i * spacing_u * u[1] + j * spacing_v * v[1]
             centers.append((x, y))
     return centers
 
@@ -272,11 +282,11 @@ def _pebble_radius(spacing: float, rng: random.Random) -> float:
     mirrors how a real handful of gravel looks -- mostly middling stones,
     a few standout large ones, and some small chips filling gaps."""
     roll = rng.random()
-    if roll < 0.15:
+    if roll < 0.2:
         return spacing * rng.uniform(_LARGE_GRAIN_THRESHOLD_FRACTION, _MAX_GRAIN_FRACTION)
     if roll < 0.8:
         return spacing * rng.uniform(0.32, 0.45)
-    return spacing * rng.uniform(0.2, 0.36)
+    return spacing * rng.uniform(0.1, 0.23)
 
 
 # ADVANCED TECHNIQUE -- spatial hashing (the "buckets" dict below):
@@ -586,7 +596,7 @@ def _inject_perimeter_contacts(
     return injected
 
 
-def _generate_circles(width: float, height: float, angle: float, size: float) -> list[Primitive]:
+def _generate_gravels(width: float, height: float, angle: float, size: float) -> list[Primitive]:
     """Gravel: a tightly packed, grain-supported cluster of irregularly-sized grain outlines
     (mostly angular, some rounded) in direct contact with their neighbors -- rather than a
     uniform grid of identical circles, or a matrix of grains kept strictly apart."""
@@ -650,6 +660,24 @@ def _generate_cross_hatch(width: float, height: float, angle: float, size: float
     return segments
 
 
+def _generate_native_marl(width: float, height: float, angle: float, size: float) -> list[Primitive]:
+    """Native Marl symbol: one full family of evenly spaced parallel lines
+    (the same "one direction" building block cross-hatch above uses twice)
+    combined with a regular dot grid -- reusing _generate_dots outright for
+    the dots, rather than re-deriving its spacing/radius formula here, so
+    the two patterns' dots always look identical and only need tuning in
+    one place. Read together, lines-plus-dots is the standard convention
+    for a mixed lithology: clay-like lined ground threaded with sand/silt-
+    like grains. default_angle=45.0 in PATTERN_REGISTRY below is what
+    actually makes the lines *diagonal* by default -- this function itself
+    just draws one line family along whatever (u, v) the given `angle`
+    produces, the same as every other rotatable pattern in this file."""
+    spacing = max(size, 0.01) * 0.3
+    u, v = _axes(angle)
+    lines: list[Primitive] = _full_span_segments(width, height, _row_centers(width, height, spacing, u, v), u)
+    return lines + _generate_dots(width, height, angle, size)
+
+
 def _generate_organic(width: float, height: float, angle: float, size: float) -> list[Primitive]:
     """Peat/topsoil symbol: a small "+"-like tick mark (one short line
     along u, a shorter one along v) repeated at every point of a regular
@@ -663,6 +691,65 @@ def _generate_organic(width: float, height: float, angle: float, size: float) ->
         segments.append(LineSegment(x - hx, y - hy, x + hx, y + hy))
         vx, vy = (tick / 3) * v[0], (tick / 3) * v[1]
         segments.append(LineSegment(x - vx, y - vy, x + vx, y + vy))
+    return segments
+
+
+def _generate_organic_frond(width: float, height: float, angle: float, size: float) -> list[Primitive]:
+    """Organics symbol: a stylized frond -- six lines fanning out from a
+    single point P, repeated at every point of a regular grid, standing
+    upright (apex along +v) when angle=0.
+
+    The shape is defined against an imagined isosceles triangle: height h,
+    base 3h, standing on P (where the triangle's own altitude meets its
+    base at a right angle -- the base's midpoint). The triangle's two
+    slanted sides ("a" lines, base corner to apex) are never drawn -- they
+    only exist here to define where three of the six lines end. All six
+    lines start at P:
+      - two lying flat along the base, out to the left/right base
+        corners -- opposite directions from the same point, so together
+        they draw as one single straight segment, not two visually
+        distinct ones (drawn here as exactly that: one LineSegment corner
+        to corner, not two P-to-corner ones).
+      - two reaching the point 1/3 of the way up each "a" line, measured
+        from its base corner toward the apex.
+      - two reaching the point 2/3 of the way up each "a" line, same
+        measuring direction.
+      - one going straight up the triangle's own height, ending at the
+        apex where both "a" lines converge.
+    The result reads as a small, symmetric, feather-like glyph -- six
+    strokes of increasing length fanning out from one root point.
+
+    Column (u) spacing is wider than row (v) spacing -- the frond's base
+    (3h) is much wider than it is tall, so tiling it on a square grid (as
+    _grid_centers would) leaves almost no lateral gap between one frond's
+    base and the next column's, even though there's plenty of clearance
+    row to row. _grid_centers_xy takes independent spacing per axis for
+    exactly this case."""
+    row_spacing = max(size, 0.1) * 0.3
+    h = row_spacing / 7
+    column_spacing = row_spacing * 1.5  # wide enough that neighbouring fronds' bases don't nearly touch
+    u, v = _axes(angle)
+
+    def point(along_u: float, along_v: float, cx: float, cy: float) -> tuple[float, float]:
+        return cx + along_u * u[0] + along_v * v[0], cy + along_u * u[1] + along_v * v[1]
+
+    segments: list[Primitive] = []
+    for cx, cy in _grid_centers_xy(width, height, column_spacing, row_spacing, u, v):
+        p = (cx, cy)
+        base_left = point(-1.5 * h, 0.0, cx, cy)
+        base_right = point(1.5 * h, 0.0, cx, cy)
+        apex = point(0.0, h, cx, cy)
+        left_third = point(-1.0 * h, h / 3, cx, cy)
+        right_third = point(1.0 * h, h / 3, cx, cy)
+        left_two_thirds = point(-0.5 * h, 2 * h / 3, cx, cy)
+        right_two_thirds = point(0.5 * h, 2 * h / 3, cx, cy)
+
+        segments.append(LineSegment(*base_left, *base_right))
+        segments.append(LineSegment(*p, *apex))
+        segments.append(LineSegment(*p, *left_third))
+        segments.append(LineSegment(*p, *right_third))
+        segments.append(LineSegment(*p, *left_two_thirds))
+        segments.append(LineSegment(*p, *right_two_thirds))
     return segments
 
 
@@ -730,9 +817,11 @@ class HatchPattern:
 PATTERN_REGISTRY: dict[str, HatchPattern] = {
     "none": HatchPattern("none", "None (outline only)", 0.0, 1.0, _generate_none),
     "dots": HatchPattern("dots", "Dots (sand / silt)", 0.0, 1.0, _generate_dots),
-    "circles": HatchPattern("circles", "Circles (gravel)", 0.0, 1.0, _generate_circles),
+    "gravel": HatchPattern("gravel", "Gravel", 0.0, 1.0, _generate_gravels),
     "dashes": HatchPattern("dashes", "Dashes (clay)", 0.0, 1.0, _generate_dashes),
     "cross_hatch": HatchPattern("cross_hatch", "Cross-hatch (fill / made ground)", 45.0, 1.0, _generate_cross_hatch),
+    "native_marl": HatchPattern("native_marl", "Native Marl (diagonal lines + dots)", 45.0, 1.0, _generate_native_marl),
     "organic": HatchPattern("organic", "Organic ticks (peat / topsoil)", 0.0, 1.0, _generate_organic),
+    "organic_frond": HatchPattern("organic_frond", "Organic Frond (vegetation / roots)", 0.0, 1.0, _generate_organic_frond),
     "brick": HatchPattern("brick", "Brick (weathered rock)", 0.0, 1.0, _generate_brick),
 }

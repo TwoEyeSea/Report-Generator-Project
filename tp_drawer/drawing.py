@@ -845,7 +845,7 @@ def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
     )
     notes_text = _wrap_lines(notes_text, width=48)
     project_text = _wrap_lines(
-        "\n".join(filter(None, [project.info.street_address, project.info.block_and_parcel])) or "-",
+        "\n".join(filter(None, [project.info.project_name, project.info.street_address, project.info.block_and_parcel])) or "-",
         width=38,
     )
     title_text = f"TRIAL PIT NO. {pit.number}"

@@ -24,6 +24,7 @@ def test_read_project_basic(workbook_path):
     project = read_project(workbook_path)
 
     assert project.info.project_number == "AMR 15414"
+    assert project.info.project_name == "Stanley Residence"
     assert project.info.equipment_provider == "SLIM LTD."
     assert len(project.pits) == 2
 

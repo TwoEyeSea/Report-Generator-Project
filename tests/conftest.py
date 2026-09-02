@@ -61,6 +61,7 @@ def workbook_path(tmp_path) -> Path:
 DEFAULT_HEADER = {
     "Date": "02/07/26",
     "Project Number": "AMR 15414",
+    "Project Name": "Stanley Residence",
     "Street Address": "North Side",
     "Block and Parcel": "Block 33B Parcel 205",
     "Equipment Provider": "SLIM LTD.",

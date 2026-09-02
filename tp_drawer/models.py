@@ -81,6 +81,7 @@ class ProjectInfo:
 
     date: str = ""
     project_number: str = ""
+    project_name: str = ""
     street_address: str = ""
     block_and_parcel: str = ""
     equipment_provider: str = ""

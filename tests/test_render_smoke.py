@@ -47,7 +47,7 @@ def test_render_project_draws_hatch_patterns_for_cataloged_units(tmp_path):
     project = read_project(workbook_path)
     templates = [
         UnitTemplate(name="Clay", hatch_pattern="dashes", hatch_angle=30.0, hatch_size=0.8, background_color="#cbb994", line_color="#3a2f1c"),
-        UnitTemplate(name="Gravel", hatch_pattern="circles", hatch_angle=0.0, hatch_size=1.2, background_color="none", line_color="black"),
+        UnitTemplate(name="Gravel", hatch_pattern="gravel", hatch_angle=0.0, hatch_size=1.2, background_color="none", line_color="black"),
     ]
 
     output_path = tmp_path / "output.pdf"

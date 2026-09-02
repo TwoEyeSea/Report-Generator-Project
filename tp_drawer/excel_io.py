@@ -35,6 +35,7 @@ from tp_drawer.units import parse_feet_inches
 _HEADER_ALIASES = {
     "date": "date",
     "project number": "project_number",
+    "project name": "project_name",
     "street address": "street_address",
     "block and parcel": "block_and_parcel",
     "equipment provider": "equipment_provider",
@@ -314,6 +315,7 @@ def write_template(
     header_labels = [
         "Date",
         "Project Number",
+        "Project Name",
         "Street Address",
         "Block and Parcel",
         "Equipment Provider",

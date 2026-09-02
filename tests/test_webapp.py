@@ -244,7 +244,7 @@ def test_catalog_add_no_fill_checkbox_overrides_background_color(client, isolate
         data={
             "name": "Gravel",
             "description": "",
-            "hatch_pattern": "circles",
+            "hatch_pattern": "gravel",
             "background_color": "#ffffff",
             "background_nofill": "on",
         },
