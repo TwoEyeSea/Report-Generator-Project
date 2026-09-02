@@ -26,42 +26,72 @@ thickness) is resolved in priority order:
      last unit's own neutral slot_bot (nothing sits below it for an "up"
      connector to meaningfully point at, so its landing's two faces are
      always just flat/neutral or down; only its *text block* is free to
-     keep rising to continue the chain past that clamp). A shrinking suffix
-     search finds the smallest run of units, starting nearest the overflow,
-     with enough headroom above them (space between where they currently
-     sit and whatever text is directly above them) to absorb that exact
-     shift; the whole run is then translated upward by that single amount,
-     rigidly, so every gap it already had -- above its own natural
-     top-anchor, or between neighbours -- is preserved untouched rather
-     than being squeezed down to the bare minimum gap. This is deliberate:
-     a unit only donates as much of its slack as the deficit actually
-     needs, never all of it, so a relieved unit's text never ends up
-     crammed flush against the text above it when a smaller nudge would
-     have done the job. The shift can still carry a unit's text above its
-     own unit's true upper boundary when the deficit demands it -- the
-     diagonal connector is exactly what reconciles "text sitting here" with
-     "depth it actually describes". The first unit's *block* is exempt from
-     shifting at all: its ceiling is the frame itself (frame_top) rather
-     than a preceding unit's text, and frame_top sits deliberately above
-     the grade line for other purposes, so letting it rise would run its
-     text above ground level, which must never happen -- its block always
-     stays at its own natural top-anchored position, and the search for
-     headroom stops there, using its real (unmoved) text-bottom as the
-     fixed ceiling for whatever's shifting below it. Its *landing* is a
-     separate matter, exactly mirroring the last unit's block/landing
-     split (just mirrored top-for-bottom): if the group shifting below it
-     rises into the gap between the first unit's real text-bottom and its
-     own (possibly slack-capped) landing, that landing gets pulled up too
-     -- same as any other predecessor whose slack the shift used (see
-     below) -- so it never sits stranded underneath the shifted block it's
-     supposedly still above. Both the first and last unit can still be
-     pushed down if genuinely crowded -- only the upward direction is
-     restricted, and only for these two units' blocks specifically. Whichever
-     suffix ends up shifting, the unit immediately above it (whose headroom
-     the shift used) has its own landing pulled up to match the shifted
-     suffix's new top -- closing the gap so nothing below it renders past
-     a landing line that's no longer where the nearest text actually
-     starts.
+     keep rising to continue the chain past that clamp).
+
+     This is a CASCADE, not a single rigid jump -- it walks backward
+     junction by junction (last unit <-> its predecessor, then that
+     predecessor <-> *its* predecessor, and so on), and at each junction it
+     takes only the smaller of (a) the headroom actually available there
+     (the untouched gap between that junction's two units, before this
+     unit ever considered moving) and (b) whatever's still left of the
+     deficit. The moment the deficit reaches zero, the cascade stops --
+     it never reaches one junction further back than the deficit actually
+     required, and it never takes more from a junction than that junction
+     has to give. A unit that never gets reached by the cascade is left
+     completely untouched: its landing, block, and connector classification
+     are byte-for-byte whatever _push_down already computed for it.
+
+     Concretely: unit N (last) first tries to close the whole deficit using
+     only the headroom directly above it. If that's enough, ONLY unit N
+     moves, by exactly that amount, and nothing else in the whole stack is
+     touched -- the smallest possible fix. If it's not enough, N is now
+     "pinned" against its own ceiling (predecessor N-1's text), and the
+     *only* way to free more room for N is to also lift N-1 -- so the
+     cascade steps back to the N-2 <-> N-1 junction and asks the same
+     question there: how much of the still-remaining deficit can N-1's own
+     headroom (against N-2's text) supply? If the chain still isn't
+     satisfied, it keeps stepping back one junction at a time. At every
+     step, only the *newly reached* predecessor gets its first increment;
+     every unit already in the moving group receives that same fresh
+     increment too (to keep riding the newly-raised ceiling above it),
+     which is what carries earlier contributions all the way down to N.
+     The net effect: units
+     nearer the overflow accumulate the *sum* of every increment used
+     below them and above them in the chain (they need all of it to reach
+     the target), while a unit further back only accumulates the
+     increments contributed by junctions at or below its own position --
+     never inheriting a rise that occurred before it was needed. No
+     unit's own internal top-anchor slack or gap to a neighbour it did
+     NOT need to lean on is ever touched, which is what keeps this the
+     minimum-disruption fix rather than one uniform block-wide shove.
+
+     The first unit's *block* is exempt from shifting at all: its ceiling
+     is the frame itself (frame_top) rather than a preceding unit's text,
+     and frame_top sits deliberately above the grade line for other
+     purposes, so letting it rise would run its text above ground level,
+     which must never happen -- its block always stays at its own natural
+     top-anchored position, and the cascade cannot reach past it (reaching
+     the junction just below the first unit is the last step it can ever
+     take). Its *landing* is a separate matter, exactly mirroring the last
+     unit's block/landing split (just mirrored top-for-bottom): only if
+     the group ends up climbing all the way back to sit directly below the
+     first unit, AND the first unit genuinely has slack (its own text ends
+     above its own landing -- see `slack` in the module docstring's
+     opening paragraphs), does its landing get pulled up to close the gap
+     -- and only up to its own real text-bottom, never further. If it has
+     no slack, its landing is left exactly where _push_down put it. This
+     same slack-gated rule applies to *whichever* unit ends up as the
+     immediate predecessor of the final moved group, not just the first
+     unit specifically -- a predecessor with no slack of its own must never
+     have its landing forced to a new value just because something below
+     it moved, since its landing already correctly reflects its own text's
+     true extent. (This was a real, fixed bug: the landing-pull step used
+     to run unconditionally, snapping a predecessor's already-correct
+     "down" connector to an incorrect flat one whenever it happened to be
+     adjacent to a moved group, even though nothing about its own text had
+     changed.) Both the first and last unit can still be pushed down if
+     genuinely crowded -- only the upward direction is restricted, and only
+     for these two units' blocks specifically.
   3. Shrink the font and start over -- smaller text (and proportionally
      smaller gaps) may fit several units "neatly" that didn't before, so
      this is a full reset, not a patch. Because gaps shrink with the font
@@ -90,10 +120,15 @@ escalating to something more drastic if it has to:
   1. First, just nudge a too-tall label's neighbours *down* out of its
      way (like adding a line break before the next item on a to-do list).
   2. If nudging everything down would run the last label off the bottom
-     of the page, instead try scooting a whole cluster of labels *up*
-     together -- but only as far as needed to clear the bottom, like
-     sliding a stack of books up a shelf just far enough to close the
-     gap at the end, not jamming them all the way together.
+     of the page, instead scoot labels *up* -- but like a row of dominoes
+     falling in reverse, one at a time: try nudging just the very last
+     label up first, using only the free space already directly above it.
+     If that alone closes the gap, stop there -- nothing else on the page
+     moves. Only if it's not enough does the *next* label up also get
+     nudged, contributing its own free space too, and so on, one label
+     further back at a time, only ever as far as still needed. This way
+     no label ever gets shoved further than the minimum required, and a
+     label that was never needed to close the gap is never touched at all.
   3. If even that doesn't leave enough room, shrink the font size for
      *all* the labels and start over from scratch -- smaller text takes
      less vertical space, so this always eventually fits.
@@ -209,6 +244,20 @@ def _classify(landing_y: float, slot_bot: float, is_last: bool) -> str:
     return "flat" if is_last else "neutral"
 
 
+def _catch_up_landing(landings: list[float], i: int, floor: float, min_gap: float) -> None:
+    """Raise landings[i] so it never sits stranded below floor + min_gap --
+    but never lowers it (max, not assignment), since a predecessor may
+    already legitimately sit higher than that for its own, unrelated
+    reasons. `floor` is always the successor's own (possibly just-moved)
+    block_top, so this is the one shared move both _push_down and
+    _pull_up_slack make once they've decided a predecessor's landing needs
+    to track a successor that just encroached into its slack: see each
+    caller's own gating condition (why THIS is the moment to call it) in
+    its own docstring -- that condition is what differs between the two
+    cascades, not this update itself."""
+    landings[i] = max(landings[i], floor + min_gap)
+
+
 def _push_down(
     units: list[DescriptionUnit],
     heights: list[float],
@@ -230,7 +279,38 @@ def _push_down(
     text above (not that unit's landing, which may sit far lower when it
     has slack) -- a block's own landing stays at slot_bot as long as the
     block, wherever it ended up, doesn't reach past it; only an actual
-    overflow past slot_bot drags the landing down too."""
+    overflow past slot_bot drags the landing down too.
+
+    RETROACTIVE LANDING CATCH-UP -- keeping a slack predecessor's tick in
+    step, but ONLY when its slack was actually the thing that let the
+    successor rise:
+    Letting a successor's block rise into a slack predecessor's *unused*
+    space (between where that predecessor's text ends and its landing,
+    down at slot_bot) is the whole point of measuring the ceiling against
+    text, not landing -- see above. When that actually happens -- i.e.
+    block_tops[i] is ceiling-constrained, `min()` above picked `ceiling`
+    over the unit's own natural top-anchor -- the predecessor's landing
+    tick can end up stranded below where the very next thing on the page
+    now actually starts, and gets raised to close that gap: never lowered,
+    and never past that predecessor's own real text_bottom (which the
+    ceiling computation guarantees block_tops[i] + min_gap can never
+    exceed, so this is always a valid landing position, not a new
+    overflow).
+
+    This must NOT run when block_tops[i] instead won on its own natural
+    top-anchor (ceiling wasn't binding) -- that's the ordinary, unrelieved
+    case where a unit simply sits at its own slot_top with a small
+    (harmless, load-bearing-nowhere-else) padding-vs-min_gap sliver between
+    it and whatever's above, regardless of whether the unit above happens
+    to have slack. Catching that case up too would mean *every* slack
+    ("neutral") unit followed by an ordinary one gets its landing nudged
+    for no real reason -- true crowding never occurred, there is no
+    stranded tick to rescue, and it would silently turn correct flat
+    connectors into "up" ones throughout perfectly ordinary, uncrowded
+    stacks. This mirrors _pull_up_slack's identical, equally-gated
+    treatment of the junction where a push-up contribution actually lands
+    -- same rule, same "only when genuine encroachment happened" gate,
+    applied here to every consecutive pair as the forward cascade runs."""
     n = len(units)
     block_tops = [0.0] * n
     landings = [0.0] * n
@@ -238,7 +318,10 @@ def _push_down(
     prev_text_bottom = frame_top
     for i, unit in enumerate(units):
         ceiling = prev_text_bottom - min_gap
-        block_tops[i] = min(unit.slot_top - padding, ceiling)
+        natural_top = unit.slot_top - padding
+        block_tops[i] = min(natural_top, ceiling)
+        if i > 0 and ceiling <= natural_top:  # genuinely ceiling-constrained, not just naturally close
+            _catch_up_landing(landings, i - 1, block_tops[i], min_gap)
         natural_bottom = block_tops[i] - padding - heights[i]
         landings[i] = min(unit.slot_bot, natural_bottom)
         text_bottoms[i] = natural_bottom
@@ -248,22 +331,19 @@ def _push_down(
 
 def _pull_up_slack(
     units: list[DescriptionUnit],
-    heights: list[float],
     block_tops: list[float],
     landings: list[float],
     text_bottoms: list[float],
-    frame_top: float,
     frame_bottom: float,
     min_gap: float,
-    padding: float,
 ) -> None:
     """Step 2 of the algorithm: after step 1 (_push_down) has run and the
     last unit's landing still overflows past the bottom of the frame,
-    shift the smallest possible trailing group of units upward by exactly
-    the amount needed to bring that landing back to frame_bottom -- no
-    more. Modifies block_tops/landings in place (rather than returning new
-    lists) to slot its results into the arrays _push_down already built,
-    only for the units in the winning group.
+    CASCADE a minimal upward shift back through as few preceding units as
+    possible -- see the module docstring's "Push up" section for the full
+    reasoning; this docstring focuses on the mechanics. Modifies
+    block_tops/landings in place (rather than returning new lists) to slot
+    its results into the arrays _push_down already built.
 
     Only called when the push-down cascade has pushed the last unit's
     landing past the frame's bottom edge. (It's always the *last* unit
@@ -275,103 +355,75 @@ def _pull_up_slack(
     deepest point in the whole stack. Checking only landings[-1] is
     therefore enough; no other unit needs a separate check.)
 
-    THE TARGET -- how far the shift needs to reach:
+    THE TARGET -- how far the cascade needs to reach in total:
     The deficit is frame_bottom - landings[-1]. But the last unit's
     landing is never allowed to rise above its own neutral slot_bot (see
     the module docstring) regardless of how much the deficit demands, so
-    the actual rise this function will try to deliver is capped at
-    whichever is smaller: the deficit itself, or the headroom already
-    available between the last landing and its own slot_bot. If that cap
-    is already zero or negative (the last unit is already sitting right
-    at its own neutral ceiling), push-up has nothing left to give and the
-    remaining deficit is left for the font-shrink step to resolve.
+    `remaining` -- the running total still owed -- starts at whichever is
+    smaller: the deficit itself, or the headroom already available between
+    the last landing and its own slot_bot. If that's already zero or
+    negative (the last unit is already sitting right at its own neutral
+    ceiling), push-up has nothing left to give and the whole deficit is
+    left for the font-shrink step to resolve.
 
-    THE SEARCH -- how many units the shift needs to reach back through:
-    Try shifting just the last unit first, then the last two, then the
-    last three, and so on working back up the page (a classic
-    shrink-the-search-space loop). For a candidate group starting at unit
-    `start`, its available headroom is the gap between wherever its first
-    unit currently sits and whatever text ends directly above it (seeded
-    from that predecessor's actual, unmoved text-bottom -- not its
-    landing, which may sit lower still if it has its own slack). The
-    first candidate whose headroom covers the needed rise wins; reaching
-    further back than necessary would move more text than the deficit
-    actually requires. If no candidate has enough headroom even after
-    reaching all the way back, the largest reachable group absorbs as
-    much of the rise as its headroom allows, and the rest is left for
-    font-shrink.
+    THE CASCADE -- walking junction by junction, back to front:
+    `i` counts down from the last unit's index to 1, treating each `i` as
+    "the junction between predecessor units[i - 1] and units[i]". At each
+    junction:
+      - headroom = the UNTOUCHED gap there: text_bottoms[i - 1] - min_gap
+        - block_tops[i]. This is always safe to read directly (not
+        accumulated/cached) because a unit's own block_tops/text_bottoms
+        entry is only ever written by an EARLIER iteration of this same
+        loop once that specific index has been added to the moving group
+        -- and the loop only ever adds indices >= i on iteration i, so
+        index i and index i - 1 are still guaranteed untouched the first
+        time this junction is examined.
+      - contribution = min(remaining, headroom) -- never more than the
+        junction actually has, never more than what's still owed.
+      - if contribution > 0: every unit from i to the end (range(i, n))
+        receives += contribution on both block_top and landing. On the
+        very first pass this is just the last unit; each subsequent pass
+        extends the affected range one unit further back, so a unit
+        nearer the overflow keeps receiving every later increment too --
+        this is what accumulates the full total rise at the tail while
+        each predecessor only carries the increments from its own
+        junction onward (see the module docstring for why that's the
+        physically-correct distribution, not an approximation of it).
+      - remaining -= contribution. The loop exits the instant remaining
+        <= 0 -- no further junction is ever touched once the deficit is
+        satisfied, which is what keeps this a minimum-disruption fix
+        rather than a uniform block-wide shove.
+      - if units[i - 1].is_first: this was necessarily the last usable
+        junction (that unit's block can never move -- see the module
+        docstring), so the loop stops here regardless of whether
+        `remaining` reached zero. Any leftover is left for font-shrink.
 
-    Because the shift is a single rigid translation -- every unit in the
-    winning group moves up by exactly the same amount -- every gap that
-    group already had (natural top-anchor slack, or generous room between
-    neighbours) survives untouched. Only the amount of slack actually
-    needed to close the deficit gets used; nothing is compacted down to
-    the bare minimum gap the way a "pack as tight as possible" approach
-    would, which is what used to leave relieved units crammed flush
-    against the text above them even when only a small nudge was needed.
-
-    The first unit is where the search must stop: it never shifts (see
-    the module docstring for why), so a group reaching back to it is
-    seeded from its own real, unmoved text-bottom, and the search goes no
-    further -- there's nothing above it to reach for.
-
-    Whichever group ends up shifting, the unit immediately above it (start
-    - 1) was used only as a *seed* -- its own landing/block are left
-    untouched here, still sitting wherever _push_down put them. If that
-    unit has slack (its landing capped at its own slot_bot while its text
-    actually ends higher up), the shifted group was seeded from that
-    higher text-bottom, meaning it can legitimately occupy the vertical
-    space down to there -- including space below start - 1's own landing
-    line. Left alone, that landing line -- and the text-start of whatever
-    a future edit adds -- would sit stranded below the top of the shifted
-    group, clipping through it. start - 1's landing is therefore pulled up
-    to close that gap, floored at its own slot_bot so it's never dragged
-    below its own true depth as a side effect of relieving a unit it
-    isn't itself part of."""
+    RETROACTIVE LANDING CATCH-UP -- keeping a junction's predecessor tick in
+    step, but ONLY at a junction that actually contributed:
+    `headroom` here is measured against `text_bottoms` (the actual, unmoved
+    bottom edge of the text above), the same choice _push_down makes and
+    for the same reason -- see that function's docstring, including why
+    this catch-up must be gated on genuine use of that headroom rather than
+    applied everywhere. Exactly when `contribution > 0` -- this junction's
+    predecessor really did just get leaned on to free up real room -- its
+    landing is raised to close the gap with the successor's new block_top,
+    never lowered, and never past its own real text_bottom (which headroom
+    being non-negative already guarantees this can't exceed). A junction
+    with zero contribution is left alone, for the same reason _push_down
+    leaves an unconstrained junction alone: nothing was actually taken from
+    that predecessor, so there's no stranded tick to rescue there -- either
+    it was already fine, or _push_down's own matching catch-up already
+    handled it during that earlier pass. A pair further along inside the
+    same moved group, where BOTH sides shift by the same later increment,
+    needs no separate catch-up either: equal increments preserve whatever
+    gap already held between them."""
     n = len(units)
     last = units[-1]
     deficit = frame_bottom - landings[-1]
-    needed_rise = min(deficit, last.slot_bot - landings[-1])
-    if needed_rise <= 0:
+    remaining = min(deficit, last.slot_bot - landings[-1])
+    if remaining <= 0:
         return  # the last unit is already at its own neutral ceiling -- push-up can't help
 
-    best_start = None
-    best_shift = -1.0  # sentinel below any real shift (shifts are always >= 0)
-    # range(n - 1, -1, -1) counts backward: n-1, n-2, ..., 1, 0 -- "try
-    # shifting just the last unit, then the last two, then the last
-    # three, ..." `break` stops at the very first group with enough
-    # headroom, so the result is the *smallest* group and the *exact*
-    # shift the deficit needs -- never more. A candidate's headroom isn't
-    # guaranteed to grow the further back the search reaches (unlike a
-    # "pack everything solid" approach, a rigid shift's headroom depends
-    # only on the one junction at the front of the group, which can be
-    # tighter for an earlier group than a later one) -- so only a
-    # candidate that's actually better than the best found so far replaces
-    # it; a worse, merely-more-recently-tried one never does.
-    for start in range(n - 1, -1, -1):
-        unit = units[start]
-        if unit.is_first:
-            # This unit never shifts -- see the module docstring. If it's
-            # also the only unit in the whole stack, there's nothing below
-            # it to shift either, and the search ends with nothing found.
-            if start == n - 1:
-                break
-            seed = text_bottoms[start]
-            shift_start = start + 1
-        else:
-            seed = frame_top if start == 0 else text_bottoms[start - 1]
-            shift_start = start
-        headroom = max(0.0, seed - min_gap - block_tops[shift_start])
-        shift = min(needed_rise, headroom)
-        if shift > best_shift:
-            best_start, best_shift = shift_start, shift
-        if headroom >= needed_rise or unit.is_first:
-            break  # sufficient, or this was the last possible group to try
-
-    if best_start is None or best_shift <= 0:
-        return
-    start = best_start
-    shift = best_shift
     # ADVANCED TECHNIQUE -- mutating the caller's lists in place:
     # Unlike most functions in this file, _pull_up_slack doesn't return
     # new lists -- it directly edits the block_tops/landings lists that
@@ -380,12 +432,20 @@ def _pull_up_slack(
     # _place_at_fontsize created, not a copy, so changes made to it here
     # are visible back in _place_at_fontsize once this function returns --
     # which is why this function's own return type is `None`; its whole
-    # effect is this in-place edit.
-    for i in range(start, n):
-        block_tops[i] += shift
-        landings[i] += shift
-    if start > 0:
-        landings[start - 1] = max(units[start - 1].slot_bot, block_tops[start] + min_gap)
+    # effect is these in-place edits.
+    for i in range(n - 1, 0, -1):
+        if remaining <= 0:
+            break
+        headroom = max(0.0, text_bottoms[i - 1] - min_gap - block_tops[i])
+        contribution = min(remaining, headroom)
+        if contribution > 0:
+            for j in range(i, n):
+                block_tops[j] += contribution
+                landings[j] += contribution
+            remaining -= contribution
+            _catch_up_landing(landings, i - 1, block_tops[i], min_gap)
+        if units[i - 1].is_first:
+            break  # its block can never move -- this is the last usable junction
 
 
 def _place_at_fontsize(
@@ -412,7 +472,7 @@ def _place_at_fontsize(
     # Push-up is a fallback, not a default: only attempted once the push-down
     # cascade has carried the deepest landing past the bottom of the frame.
     if landings and landings[-1] < frame_bottom:
-        _pull_up_slack(units, heights, block_tops, landings, text_bottoms, frame_top, frame_bottom, min_gap, padding)
+        _pull_up_slack(units, block_tops, landings, text_bottoms, frame_bottom, min_gap)
 
     return [
         PlacedDescription(

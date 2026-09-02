@@ -138,25 +138,29 @@ DESC_FONTSIZE_DEFAULT = 6.5
 DESC_MIN_GAP_RATIO = 0.1 / line_height_in(DESC_FONTSIZE_DEFAULT)
 DESC_PADDING_RATIO = 0.05 / line_height_in(DESC_FONTSIZE_DEFAULT)
 
-# Termination caption: one extra line of text ("<FORMATION> ENCOUNTERED AT
-# DEPTH", or the DEFAULT_TERMINATION_REASON sentinel) drawn directly under
-# the *last* unit description's own landing line, left-aligned with the
-# description text at LABEL_X, at whatever fontsize the last description
-# ended up placed at (see _termination_caption and its call site in
-# _draw_stratigraphy_column). Because it isn't one of the DescriptionUnit
-# objects description_layout.py knows about, its own vertical space has to
-# be reserved by hand: TERMINATION_RESERVED_HEIGHT is added on top of
-# FRAME_BOTTOM_Y before place_descriptions ever sees it, so its push-down/
-# push-up/shrink logic always treats the true bottom of the page as being
-# this much higher than it actually is -- guaranteeing a landing never
-# ends up so low that this caption would have nowhere left to go. Sized
-# from DESC_FONTSIZE_DEFAULT (the *largest* fontsize the algorithm will
-# ever choose, since it only ever shrinks from there) rather than
-# whatever fontsize the layout actually settles on, so the reserved
-# space is always at least as big as this caption will actually need,
-# however much the rest of the descriptions end up shrinking.
+# Termination caption: one or two lines of text (a bare formation name
+# wraps to "<FORMATION> \nENCOUNTERED AT DEPTH" -- two lines -- while the
+# DEFAULT_TERMINATION_REASON sentinel is shown as-is, one line; see
+# _termination_caption) drawn directly under the *last* unit description's
+# own landing line, left-aligned with the description text at LABEL_X, at
+# whatever fontsize the last description ended up placed at (see
+# _termination_caption and its call site in _draw_stratigraphy_column).
+# Because it isn't one of the DescriptionUnit objects description_layout.py
+# knows about, its own vertical space has to be reserved by hand:
+# TERMINATION_RESERVED_HEIGHT is added on top of FRAME_BOTTOM_Y before
+# place_descriptions ever sees it, so its push-down/push-up/shrink logic
+# always treats the true bottom of the page as being this much higher than
+# it actually is -- guaranteeing a landing never ends up so low that this
+# caption would have nowhere left to go. Reserved for TWO lines
+# unconditionally (not just whichever this particular pit's caption
+# happens to need) -- deliberately over-reserving for the worst case
+# rather than branching on pit.termination_reason here, matching sizing
+# from DESC_FONTSIZE_DEFAULT below: both exist so the reserved space is
+# always at least as big as the caption could ever actually need,
+# regardless of which pit or how much the rest of the descriptions end up
+# shrinking, rather than being cut exactly to fit one specific case.
 TERMINATION_TEXT_GAP = 0.04  # gap between the last unit's landing line and the caption below it
-TERMINATION_RESERVED_HEIGHT = line_height_in(DESC_FONTSIZE_DEFAULT) + TERMINATION_TEXT_GAP
+TERMINATION_RESERVED_HEIGHT = 2 * line_height_in(DESC_FONTSIZE_DEFAULT) + TERMINATION_TEXT_GAP
 
 # Groundwater symbol: a "landing" (a horizontal line that stops short of the
 # column) carries the label text and the triangle+lines symbol; a diagonal
@@ -191,19 +195,19 @@ TITLE_BLOCK_W = 3.0
 # e.g. NOTES/PROJECT, but every box gets one for consistency and so a
 # short field can still be grown into a wrapped one later without having
 # to remember to add a linespacing setting for it then).
-GENERAL_NOTES_FONTSIZE = 6
-GENERAL_NOTES_LINESPACING = 1.5
-TITLE_BLOCK_NOTES_FONTSIZE = 6.5
+GENERAL_NOTES_FONTSIZE = 6.8
+GENERAL_NOTES_LINESPACING = 1.8
+TITLE_BLOCK_NOTES_FONTSIZE = 6.8
 TITLE_BLOCK_NOTES_LINESPACING = 1.8
-TITLE_BLOCK_PROJECT_FONTSIZE = 6.5
+TITLE_BLOCK_PROJECT_FONTSIZE = 6.8
 TITLE_BLOCK_PROJECT_LINESPACING = 1.2
-TITLE_BLOCK_TITLE_FONTSIZE = 6.5
+TITLE_BLOCK_TITLE_FONTSIZE = 6.8
 TITLE_BLOCK_TITLE_LINESPACING = 0.8
-TITLE_BLOCK_DRAWN_BY_FONTSIZE = 6.5
+TITLE_BLOCK_DRAWN_BY_FONTSIZE = 6.8
 TITLE_BLOCK_DRAWN_BY_LINESPACING = 0.8
-TITLE_BLOCK_SCALE_FONTSIZE = 6.5
+TITLE_BLOCK_SCALE_FONTSIZE = 6.8
 TITLE_BLOCK_SCALE_LINESPACING = 0.8
-TITLE_BLOCK_FILE_FONTSIZE = 6.5
+TITLE_BLOCK_FILE_FONTSIZE = 6.8
 TITLE_BLOCK_FILE_LINESPACING = 0.8
 
 GENERAL_NOTES_BOILERPLATE = (
@@ -840,14 +844,9 @@ def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
         groundwater=_groundwater_short(pit).upper(),
     )
     notes_text = _wrap_lines(notes_text, width=48)
-    project_text = "\n".join(
-        textwrap.wrap(
-            ", ".join(
-                filter(None, [project.info.street_address, project.info.block_and_parcel])
-            )
-            or "-",
-            width=38,
-        )
+    project_text = _wrap_lines(
+        "\n".join(filter(None, [project.info.street_address, project.info.block_and_parcel])) or "-",
+        width=38,
     )
     title_text = f"TRIAL PIT NO. {pit.number}"
     drawn_by_text = project.info.drawn_by
@@ -857,16 +856,16 @@ def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
     # Fixed-height boxes -- each holds one short, unwrapped value rather
     # than a paragraph, so its height doesn't need to depend on the text
     # inside it the way NOTES/PROJECT's heights do below.
-    title_h = 0.4
-    drawn_by_h = 0.35
-    scale_h = 0.35
-    file_h = 0.35
+    title_h = 0.5
+    drawn_by_h = 0.5
+    scale_h = 0.5
+    file_h = 0.5
     logo_h = 0.9
 
     bottom_y = MARGIN
     available_height = top_y - bottom_y
     remaining_height = available_height - title_h - drawn_by_h - scale_h - file_h - logo_h
-    notes_h = max(remaining_height * 0.35, 1.0)
+    notes_h = max(remaining_height * 0.5, 1.0)
     project_h = max(remaining_height - notes_h, 1.0)
 
     # Walk down from the top of the page, placing each box directly below
@@ -876,7 +875,7 @@ def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
     y -= notes_h
     draw_box(ax, x, y, w, notes_h, "NOTES:", notes_text, fontsize=TITLE_BLOCK_NOTES_FONTSIZE, linespacing=TITLE_BLOCK_NOTES_LINESPACING)
     y -= project_h
-    draw_box(ax, x, y, w, project_h, "PROJECT:", project_text, fontsize=TITLE_BLOCK_PROJECT_FONTSIZE, linespacing=TITLE_BLOCK_PROJECT_LINESPACING)
+    draw_box(ax, x, y, w, project_h, "PROJECT:", f"GEOTECHNICAL INVESTIGATION\n{project_text.upper()}", fontsize=TITLE_BLOCK_PROJECT_FONTSIZE, linespacing=TITLE_BLOCK_PROJECT_LINESPACING)
     y -= title_h
     draw_box(ax, x, y, w, title_h, "TITLE:", title_text, fontsize=TITLE_BLOCK_TITLE_FONTSIZE, linespacing=TITLE_BLOCK_TITLE_LINESPACING)
     y -= drawn_by_h

@@ -2,6 +2,7 @@ import pytest
 
 from tp_drawer.description_layout import (
     DescriptionUnit,
+    _classify,
     _place_at_fontsize,
     _push_down,
     _scaled_wrap_width,
@@ -103,15 +104,17 @@ def test_push_up_shifts_by_only_the_deficit_not_the_full_available_slack():
     assert placed[0].landing_y == pytest.approx(placed[1].block_top_y + MIN_GAP)
 
 
-def test_search_keeps_the_best_candidate_even_when_a_further_reach_has_less_headroom():
-    # A candidate suffix's headroom depends only on the single junction at
-    # its own front -- unlike a "pack everything solid" approach, reaching
-    # further back is NOT guaranteed to supply more room. Here, C alone has
-    # real headroom (B's actual text ends well above C's natural spot), but
-    # B itself is already jammed against A's ceiling (zero headroom), and so
-    # is A against the frame -- both worse than what C alone already offers.
-    # The search must keep C alone's result rather than settling for
-    # whatever a later (larger, but worse) candidate computes.
+def test_cascade_stops_once_the_deficit_is_covered_even_with_more_units_to_reach():
+    # The cascade walks junction by junction (C<->B, then B<->A), compounding
+    # contributions -- but only for as many junctions as the remaining
+    # deficit still needs, and only where a junction actually has headroom
+    # to give. Here, C alone has real headroom (B's actual text ends well
+    # above C's natural spot) -- but the B<->A junction right behind it has
+    # none (B is already jammed against A's ceiling). Demanding more than C
+    # alone can supply forces the cascade to also try the B<->A junction; it
+    # correctly finds nothing there and stops, without ever touching A's own
+    # block/landing (unit index 0 is structurally exempt from ever moving,
+    # regardless of its is_first flag -- see _pull_up_slack's docstring).
     frame_top = 10.0
     units = [
         DescriptionUnit(slot_top=10.0, slot_bot=8.0, name="A", description=""),
@@ -122,11 +125,10 @@ def test_search_keeps_the_best_candidate_even_when_a_further_reach_has_less_head
     block_tops, landings, text_bottoms = _push_down(units, heights, frame_top, MIN_GAP, PADDING)
 
     headroom_c_alone = text_bottoms[1] - MIN_GAP - block_tops[2]
-    headroom_b_and_c = text_bottoms[0] - MIN_GAP - block_tops[1]
-    headroom_all_three = frame_top - MIN_GAP - block_tops[0]
+    headroom_b_and_a = text_bottoms[0] - MIN_GAP - block_tops[1]
     assert headroom_c_alone > 0.4  # C alone genuinely has room to give
-    assert headroom_b_and_c == pytest.approx(0.0)  # reaching to B adds nothing
-    assert headroom_all_three == pytest.approx(0.0)  # reaching to A adds nothing either
+    assert headroom_b_and_a == pytest.approx(0.0)  # the next junction back adds nothing
+    unrelieved_a_connector = _classify(landings[0], units[0].slot_bot, units[0].is_last)
 
     # Demand more than even C alone (the best option) can fully supply, so
     # push-up is only ever partially successful here -- the point is which
@@ -135,12 +137,19 @@ def test_search_keeps_the_best_candidate_even_when_a_further_reach_has_less_head
     frame_bottom = landings[2] + cap
     placed = _place_at_fontsize(units, 30, frame_top, frame_bottom, MIN_GAP_RATIO, PADDING_RATIO, DEFAULT_FONTSIZE)
 
-    assert placed[2].landing_y == pytest.approx(landings[2] + headroom_c_alone)  # C alone's result, not worse
-    # A is untouched entirely -- it's never even the winning suffix's
-    # immediate predecessor (that's B), so nothing pulls its landing either.
+    assert placed[2].landing_y == pytest.approx(landings[2] + headroom_c_alone)  # C alone's contribution, not less
+    # A's block/landing are IDENTICAL to _push_down's own output -- push-up
+    # reached the B<->A junction (found nothing) but never touched A itself.
+    # (A's connector is "up", not "neutral": _push_down's own retroactive
+    # catch-up already raised it, independent of push-up entirely -- B's
+    # block here is genuinely ceiling-constrained against A's real text
+    # (that's exactly what headroom_b_and_a == 0 confirms), so A's landing
+    # was pulled up to meet it during the push-down pass, before push-up
+    # ever runs. What this test demonstrates is that push-up adds nothing
+    # further on top of that.)
     assert placed[0].block_top_y == pytest.approx(block_tops[0])
     assert placed[0].landing_y == pytest.approx(landings[0])
-    assert placed[0].connector == "neutral"
+    assert placed[0].connector == unrelieved_a_connector
 
 
 def test_unit_zero_never_rises_even_with_real_frame_headroom():
@@ -261,6 +270,110 @@ def test_predecessors_landing_tracks_the_pushed_units_actual_block_top():
     assert placed[0].landing_y == pytest.approx(landings[0])
 
 
+def test_predecessor_with_no_slack_is_never_flattened_by_a_neighbours_shift():
+    # Regression test for a real, fixed bug: the push-up cascade's last
+    # step used to pull a predecessor's landing up to its own slot_bot
+    # unconditionally, whenever the group below it moved -- even when that
+    # predecessor had NO slack of its own (its own text already overflows
+    # its own slot, so its landing correctly tracks its own text_bottom,
+    # below slot_bot). Forcing it up to slot_bot in that case silently
+    # turned a correct "down" connector into an incorrect "flat" one, with
+    # the landing left floating above where the predecessor's own text
+    # actually ends.
+    frame_top = 10.0
+    units = [
+        DescriptionUnit(slot_top=frame_top, slot_bot=9.5, name="A", description="", is_first=True),
+        DescriptionUnit(slot_top=9.5, slot_bot=9.3, name="B", description="word " * 12),
+        DescriptionUnit(slot_top=8.5, slot_bot=8.3, name="C", description="", is_last=True),
+    ]
+    heights = [len(_wrap_unit(u, 30)) * ONE_LINE for u in units]
+    block_tops, landings, text_bottoms = _push_down(units, heights, frame_top, MIN_GAP, PADDING)
+
+    # Confirm the scenario: B genuinely overflows its own slot (no slack),
+    # and C (last) has real headroom above it -- entirely independent of
+    # B's own overflow, since C's slot starts well below where B's text ends.
+    assert text_bottoms[1] == pytest.approx(landings[1])  # B has no slack
+    assert landings[1] < units[1].slot_bot
+    headroom_b_to_c = text_bottoms[1] - MIN_GAP - block_tops[2]
+    cap = units[2].slot_bot - landings[2]  # C's landing can rise no further than its own neutral cap
+    assert headroom_b_to_c > 0
+    assert cap > 0
+
+    # Demand only a small lift -- well within both what the B<->C junction
+    # alone can supply AND C's own neutral cap -- so the cascade never
+    # needs to touch B itself, and the cap isn't what limits the result.
+    small_lift = 0.3 * min(headroom_b_to_c, cap)
+    assert small_lift < headroom_b_to_c
+    assert small_lift < cap
+    frame_bottom = landings[2] + small_lift
+    placed = _place_at_fontsize(units, 30, frame_top, frame_bottom, MIN_GAP_RATIO, PADDING_RATIO, DEFAULT_FONTSIZE)
+
+    assert placed[2].landing_y == pytest.approx(frame_bottom)  # C is fully relieved
+    # B must be completely untouched -- same landing, same "down" connector.
+    assert placed[1].landing_y == pytest.approx(landings[1])
+    assert placed[1].connector == "down"
+
+
+def test_cascade_compounds_multiple_junctions_instead_of_picking_one():
+    # Regression test for a real, fixed bug (and the exact behaviour a user
+    # reported as "push-up takes more space than needed"): the push-up step
+    # used to search for a single best rigid group and use ONLY that one
+    # junction's headroom, discarding a nearer, smaller pocket of headroom
+    # entirely whenever a further-back junction offered more on its own.
+    # That could both (a) fail to reach a target the combined slack could
+    # easily have supplied, needlessly triggering font-shrink, and (b) shove
+    # an in-between unit by the FULL amount taken from a distant junction
+    # when only a fraction of it was actually required from that unit.
+    #
+    # Here, D (last) needs more lift than the nearest junction (C<->D) can
+    # give alone, but less than the nearest two junctions (C<->D and B<->C)
+    # combined can give.
+    frame_top = 10.0
+    units = [
+        DescriptionUnit(slot_top=frame_top, slot_bot=9.5, name="A", description="", is_first=True),
+        DescriptionUnit(slot_top=9.5, slot_bot=9.2, name="B", description="word " * 6),
+        DescriptionUnit(slot_top=9.0, slot_bot=8.6, name="C", description=""),
+        DescriptionUnit(slot_top=8.6, slot_bot=8.3, name="D", description="word " * 24, is_last=True),
+    ]
+    heights = [len(_wrap_unit(u, 30)) * ONE_LINE for u in units]
+    block_tops, landings, text_bottoms = _push_down(units, heights, frame_top, MIN_GAP, PADDING)
+
+    headroom_c_to_d = text_bottoms[2] - MIN_GAP - block_tops[3]
+    headroom_b_to_c = text_bottoms[1] - MIN_GAP - block_tops[2]
+    assert headroom_c_to_d > 0
+    assert headroom_b_to_c > 0
+
+    # A target only the two junctions COMBINED can reach.
+    needed = headroom_c_to_d + 0.6 * headroom_b_to_c
+    assert needed > max(headroom_c_to_d, headroom_b_to_c)  # neither junction alone would suffice
+    cap = units[3].slot_bot - landings[3]
+    assert needed < cap  # confirm the last unit's own neutral cap isn't the limiting factor here
+    frame_bottom = landings[3] + needed
+
+    placed = _place_at_fontsize(units, 30, frame_top, frame_bottom, MIN_GAP_RATIO, PADDING_RATIO, DEFAULT_FONTSIZE)
+
+    # D reaches the full target -- something a single-best-junction search
+    # (capped at max(headroom_c_to_d, headroom_b_to_c)) could never do.
+    assert placed[3].landing_y == pytest.approx(frame_bottom)
+
+    # C -- the in-between unit -- has its own slack (its landing sits at its
+    # own slot_bot while its text ends higher up), which is *why*
+    # headroom_c_to_d was available in the first place: the C<->D junction's
+    # contribution fully uses that slack, so C's landing catches up to its
+    # own real text_bottom right there (same rule _push_down applies, see
+    # _pull_up_slack's docstring) -- independent of, and before, the B<->C
+    # junction's own separate contribution to C.
+    catchup_from_c_to_d = text_bottoms[2] - landings[2]
+    assert catchup_from_c_to_d > 0  # confirms C's slack is what made headroom_c_to_d possible
+    # C's *total* movement is that catch-up plus only the fraction of the
+    # B<->C junction's headroom actually needed (0.6 of it here) -- not the
+    # whole junction's capacity and not the full deficit: the
+    # minimum-disruption fix.
+    c_shift = placed[2].landing_y - landings[2]
+    assert c_shift == pytest.approx(catchup_from_c_to_d + 0.6 * headroom_b_to_c)
+    assert c_shift < catchup_from_c_to_d + headroom_b_to_c
+
+
 def test_last_unit_can_still_be_pushed_down_by_its_own_overflow():
     # The clamp only forbids the last unit from rising above neutral -- it
     # must still be able to go "down" when its own text genuinely overflows
@@ -305,10 +418,11 @@ def test_push_up_can_carry_a_non_last_units_text_above_its_own_boundary():
     assert placed[1].landing_y - placed[2].block_top_y == pytest.approx(MIN_GAP)
 
 
-def test_push_up_search_uses_the_smallest_sufficient_suffix():
-    # D (last, thin) needs lift to reach its neutral cap. C alone (its
-    # nearest donor) has no headroom of its own by default, so the search
-    # must reach back to B for D to fully recover to neutral.
+def test_push_up_cascade_reaches_back_only_as_far_as_needed():
+    # D (last, thin) needs lift to reach its neutral cap. C<->D (the nearest
+    # junction) has no headroom of its own by default, so the cascade must
+    # reach back one more junction, to B<->A, for D to fully recover to
+    # neutral.
     frame_top = 10.0
     units = [
         DescriptionUnit(slot_top=frame_top, slot_bot=9.0, name="A", description=""),
