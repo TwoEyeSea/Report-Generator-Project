@@ -1,9 +1,12 @@
 """Pure geometry math for the true-to-scale stratigraphy column.
 
-All pits in a single build share one scale, computed so the deepest pit's
-column exactly fills the fixed page frame height ("zoom out" until the
-whole log fits) -- shallower pits then draw proportionally shorter columns,
-so relative depth between pits reads correctly on the page.
+All pits in a single build share one scale. That scale is normally a
+fixed, real-world-comparable one (see compute_scale_preferring_fixed) --
+only a pit too deep to fit the page frame at that fixed scale forces a
+"zoom out" via compute_scale, just enough for the deepest pit's column to
+exactly fill the frame height. Shallower pits always draw proportionally
+shorter columns than the deepest one, so relative depth between pits
+reads correctly on the page either way.
 
 No matplotlib imports here so this stays trivially unit-testable.
 
@@ -39,6 +42,29 @@ def compute_scale(max_depth_in: Decimal, frame_height: float) -> float:
         # 0.0 is a safe "not drawable yet" placeholder.
         return 0.0
     return frame_height / float(max_depth_in)
+
+
+def compute_scale_preferring_fixed(max_depth_in: Decimal, frame_height: float, fixed_scale: float) -> float:
+    """Like compute_scale, but prefers a fixed, real-world-comparable
+    scale (page-inches per real inch of depth) whenever the deepest pit
+    fits within frame_height at that scale -- only falling back to
+    compute_scale's own "zoom until it exactly fills the frame" ratio
+    once the fixed scale would genuinely overflow the page.
+
+    Without this, a shallow pit gets stretched to fill the whole frame
+    just because it happens to be the deepest thing in its project --
+    compute_scale has no concept of "this pit is only a few inches deep
+    in absolute terms", only "this pit is the deepest one here". At a
+    shared fixed scale, a shallow pit's column is simply short, with
+    real blank space below it, the same way a shallow pit already draws
+    shorter than a deep one *within* a multi-pit project -- this just
+    extends that same relative-depth honesty to a project's single
+    deepest pit too, rather than always zooming it to fill the page."""
+    if max_depth_in <= 0:
+        return 0.0
+    if float(max_depth_in) * fixed_scale <= frame_height:
+        return fixed_scale
+    return compute_scale(max_depth_in, frame_height)
 
 
 def y_at_depth(frame_top: float, scale: float, depth_in: Decimal) -> float:

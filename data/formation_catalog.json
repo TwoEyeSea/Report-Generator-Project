@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Ironshore Formation Limestone",
+    "commentary": "Native Bedrock was not encountered within any trial pits. Consolidated native marl was encountered between {depth_range} below grade across the site. The consolidated native marl belongs to the weakly cemented limestone of the Ironshore Formation. The Ironshore Formation is the relic of a back reef lagoon palaeo-setting within the Pleistocene epoch, a low-energy environment where fine carbonate sediments would have accumulated between high-standing Ironshore patch reefs, situated further inland during a time of higher sea level, and eventually becoming the foundation for mangrove swamps due to the gradual fall in sea level. Consolidated marl typically has an allowable bearing capacity of approximately 2,000 psf."
+  },
+  {
+    "name": "Cayman Formation Dolostone",
+    "commentary": "Native Bedrock was encountered within all the excavations. Based on our previous experience, the Cayman Formation dolostone underlies this area; depth to be approximately between {depth_range}. The Cayman Formation is the relic of a benthic shelf environment setting within the Miocene Epoch, a low energy environment where fine carbonate sediments would have accumulated on the seafloor, eventually becoming the cemented limestone on island. The weathered upper surface of the Cayman Formation has an allowable bearing capacity of approximately 10,000psf."
+  },
+  {
+    "name": "Pedro Castle Formation Dolostone",
+    "commentary": "Native Bedrock was encountered within all the excavations. Based on the existing literature, the Pedro Castle Formation dolostone underlies this area; depth is approximately {depth_range} below grade level. The Pedro Castle Formation is a relic of a benthic shelf environment setting within the Pliocene epoch, a low-energy environment where fine carbonate sediments would have accumulated on the seafloor, eventually becoming the cemented dolostone on the island today. The weathered upper surface of the Pedro Castle Formation has an allowable bearing capacity of 10,000 psf."
+  }
+]

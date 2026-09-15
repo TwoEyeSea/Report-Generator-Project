@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Strip Footings",
+    "plain_paragraphs": [
+      "From the findings of this site investigation, a viable foundation option is the use of isolated pad footings and linear strip footings, supporting a system of masonry super structure walls. The ground floor slab will likely be designed as cast on grade. It is therefore recommended that the crusher run fill for the foundation system should bear on the consolidated native marl encountered between 0'-9\" to 0'-10\" below grade.",
+      "Any severely contaminated and or organic soils noted within throughout the ground investigation will need to be demucked and removed prior to depositing clean engineered fill beneath the footprint of the building.",
+      "Any other contaminated and compressible soils encountered throughout future earth works should be excavated and replaced with suitable engineered fill. After the placement of imported engineered fill, additional and thorough compaction is recommended across the site followed by a nuclear density test to ensure compaction has been achieved (via. a qualified and approved testing agency). Any additional imported fill should consist of well-graded crushed stone (e.g., well-graded Marl Fill, Cayman Rock or crusher run). This fill material should be suitably compacted and then can be used as the means of support for the slab on grade / structure. Crusher run fill should be used immediately beneath the slab."
+    ],
+    "list_paragraphs": [
+      "It is important to note, when building a foundation system on engineered fill there is the possibility of differential settlement of the foundation system (this could lead to cracking in walls and slabs). If this method is to be used, the following technical requirements must be strictly adhered to:",
+      "Well-constructed excavation, safely executed, with all soft and hard spots removed, and made reasonably dry and well drained.",
+      "Sound fill without undesirable material and capable of compaction as specified, provided with starting and capping layers as necessary.",
+      "Placement and compaction to ensure that the performance of the fill will meet required criteria as a foundation fill (Typically 95% compaction or greater in layers no greater than 9\"). Fill material specification to be generated and approved by a professional engineer.",
+      "Appropriate monitoring and quality control throughout development."
+    ]
+  },
+  {
+    "name": "Piles",
+    "plain_paragraphs": [
+      "It is the opinion of this practice that a viable foundation option based on maximum structural integrity and minimum risk of differential settlement be the utilization of reinforced concrete augercast Piles. Cast-in-place, 16\" or 20\" dia. reinforced concrete augercast piles can be installed and socketed directly into the underlying bedrock encountered between 18'-0\" to 22'-0\" below grade.",
+      "The piles should be socketed between 6 to 12 inches within the high integrity Cayman Formation limestone, grouped and spaced to suit the wall and reinforcement provision and column layout of the building. Depending on their given length piles could be expected to provide an allowable service load compression capacity of 65 tons. A system of reinforced concrete grade beams can then be used to share the loadings between piles to support load bearing walls and ground slabs. Dependent on the layout of the building, there may be concentrated loadings in excess of individual pile capacities. As such, it may be necessary to position several piles in close proximity to form a group, as is normal practice. Reinforced concrete columns/walls should extend up from the pile groups via an engineered pile cap to give a suitable load path for any isolated structural loadings. In these cases, interval times must allow for sufficient curing of installed piles prior to the installation of adjacent piles to prevent disturbance. These piles can be simply tested on site to check capacity, provided that a suitable anchor rod is installed to the pile. We would recommend that test loads should be at least twice the proposed working load of the pile.",
+      "All concrete grout used within the piles should have a minimum compressive strength of 5,000 pounds per square inch (psi) at 28 days, to protect against sulphate attack."
+    ],
+    "list_paragraphs": []
+  }
+]

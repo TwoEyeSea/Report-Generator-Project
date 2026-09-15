@@ -57,13 +57,18 @@ from tp_drawer.catalog import UnitTemplate, find_template, load_catalog
 from tp_drawer.config import Config
 from tp_drawer.description_layout import DescriptionUnit, line_height_in, place_descriptions
 from tp_drawer.hatch_patterns import PATTERN_REGISTRY, Blob, Dot, LineSegment
-from tp_drawer.layout import band_y_range, compute_scale, y_at_depth
+from tp_drawer.layout import band_y_range, compute_scale_preferring_fixed, y_at_depth
 from tp_drawer.models import DEFAULT_TERMINATION_REASON, Project, TrialPit
 from tp_drawer.units import format_feet_inches
 
 # Frame geometry, in page inches. All pits in a build share one true scale,
-# computed so the deepest pit's column exactly fills COLUMN_HEIGHT_BUDGET --
-# shallower pits then draw proportionally shorter columns. The frame's
+# normally the fixed FIXED_COLUMN_SCALE (a real, nameable scale) unless the
+# deepest pit is too deep to fit the page at it, in which case the scale
+# zooms out just enough to make the deepest pit's column exactly fill
+# COLUMN_HEIGHT_BUDGET instead -- see compute_project_scale and
+# compute_scale_preferring_fixed. Shallower pits always draw proportionally
+# shorter columns than the deepest one, whichever way the scale was decided.
+# The frame's
 # bottom edge rests directly on top of the general notes box below it (no
 # gap), so the unit-description stack gets full use of the space right down
 # to the notes -- its push-up/shrink logic guarantees nothing ever crosses
@@ -71,6 +76,16 @@ from tp_drawer.units import format_feet_inches
 # up from its old position now that the "TRIAL PIT No." title above it is
 # gone, reclaiming that space for the frame itself.
 MARGIN = 0.4
+
+# The page's own outermost border (drawn at the very start of
+# render_pit_page, around the full MARGIN..page_size-MARGIN rectangle) --
+# the boldest stroke on the whole page, same idea as
+# TITLE_BLOCK_BORDER_LINEWIDTH below for the title block's own outer
+# frame, just one level up: this border encloses everything else (title
+# block included), so it's sized to read as the outermost frame, not just
+# another box.
+PAGE_BORDER_LINEWIDTH = 2.5
+
 FRAME_TOP_Y = 7.8
 GENERAL_NOTES_HEIGHT = 1.3
 FRAME_BOTTOM_Y = MARGIN + GENERAL_NOTES_HEIGHT
@@ -84,6 +99,15 @@ FRAME_HEIGHT = FRAME_TOP_Y - FRAME_BOTTOM_Y
 # slightly to make room for this margin.
 COLUMN_BOTTOM_PADDING = 0.3
 COLUMN_HEIGHT_BUDGET = FRAME_HEIGHT - COLUMN_BOTTOM_PADDING
+
+# Page-inches per real inch of depth: "1 inch = 2 feet" (1/24), the scale
+# compute_project_scale below prefers whenever a project's deepest pit
+# fits within COLUMN_HEIGHT_BUDGET at it (up to ~11'-7" deep) -- only a
+# pit deeper than that falls back to compute_scale's own "zoom to exactly
+# fill the frame" ratio. Without this, a shallow pit gets stretched to
+# fill the whole page just for being the deepest thing in its project;
+# see compute_scale_preferring_fixed's own docstring for the full reasoning.
+FIXED_COLUMN_SCALE = 1 / 24
 
 # figure_display_box: the ceiling the unit-description stack pushes up
 # against (see description_layout.py). Its bottom is FRAME_BOTTOM_Y, same as
@@ -185,6 +209,15 @@ MAIN_ZONE_RIGHT = 7.5
 TITLE_BLOCK_X = MAIN_ZONE_RIGHT + 0.1
 TITLE_BLOCK_W = 3.0
 
+# The title block's own OUTER border (drawn once, wrapping the whole stack
+# of NOTES/PROJECT/TITLE/DRAWN BY/SCALE/FILE/logo boxes -- see the last
+# line of _draw_title_block) is deliberately bolder than the sharp-
+# cornered, thinner border each individual box inside it gets from
+# draw_box() -- that contrast is what makes it read as the title block's
+# own enclosing frame rather than just another one of the boxes stacked
+# within it.
+TITLE_BLOCK_BORDER_LINEWIDTH = 2.0  # vs. draw_box()'s fixed 0.8 for every box inside it
+
 # Per-box text styling: every labelled box drawn by draw_box() -- the
 # general notes box at the bottom left, plus every box in the title block
 # column (NOTES, PROJECT, TITLE, DRAWN BY, SCALE, FILE) -- gets its own
@@ -211,19 +244,19 @@ TITLE_BLOCK_FILE_FONTSIZE = 6.8
 TITLE_BLOCK_FILE_LINESPACING = 0.8
 
 GENERAL_NOTES_BOILERPLATE = (
-    "1) TRIAL PIT EXCAVATED WITH A BACKHOE SUPPLIED BY {equipment_provider}.\n"
+    "1) TRIAL PIT EXCAVATED WITH A {equipment} SUPPLIED BY {equipment_provider}.\n"
     "2) GROUND LEVELS ARE APPROXIMATE AND BASED UPON LOCAL KNOWLEDGE ONLY.\n"
     "3) TRIAL PIT EXCAVATION CARRIED OUT ON {date}.\n"
     "4) THIS TRIAL PIT LOG TO BE READ IN CONJUNCTION WITH SITE INSPECTION REPORT NO. 1, {file_ref}\n"
-    "5) GROUNDWATER WAS ENCOUNTERED DURING THE EXCAVATION AT {groundwater}.\n"
-    "6) BEDROCK WAS ENCOUNTERED."
+    "5) {groundwater_note}\n"
+    "6) {bedrock_note}"
 )
 
 TITLE_BLOCK_NOTES_BOILERPLATE = (
     "1) TRIAL PITS EXCAVATED WITH A {equipment}.\n"
     "2) SUBSOILS INVESTIGATION CARRIED OUT ON {date}.\n"
     "3) THIS TRIAL PIT LOG TO BE READ IN CONJUNCTION WITH REPORT NO. {file_ref}\n"
-    "4) GROUNDWATER WAS ENCOUNTERED THROUGHOUT THE EXCAVATION AT {groundwater}.\n"
+    "4) {groundwater_note}\n"
     "5) STRUCTURAL INTEGRITY REMAINED SOUND WITHIN PIT WALLS."
 )
 
@@ -287,6 +320,45 @@ def _groundwater_short(pit: TrialPit) -> str:
     if pit.groundwater_depth_in is None:
         return "NOT ENCOUNTERED"
     return f"{format_feet_inches(pit.groundwater_depth_in)} BELOW GRADE"
+
+
+def _groundwater_note(pit: TrialPit, *, verb: str) -> str:
+    """Full text for a general/title-block notes box's groundwater line --
+    returns the *whole* sentence rather than a depth to slot into a fixed
+    "...WAS ENCOUNTERED ... AT {groundwater}." template, so a pit with no
+    recorded groundwater reads as a complete, grammatical sentence
+    ("GROUNDWATER WAS NOT ENCOUNTERED THROUGHOUT THIS EXCAVATION.")
+    instead of the old template producing the nonsensical
+    "...AT NOT ENCOUNTERED." `verb` ("DURING"/"THROUGHOUT") lets the
+    general notes box and title block notes box keep their own existing
+    wording for the encountered case, while both share the same clean
+    sentence for the not-encountered case."""
+    if pit.groundwater_depth_in is None:
+        return "GROUNDWATER WAS NOT ENCOUNTERED THROUGHOUT THIS EXCAVATION."
+    return f"GROUNDWATER WAS ENCOUNTERED {verb} THE EXCAVATION AT {_groundwater_short(pit).upper()}."
+
+
+# Formation names that represent striking genuine, unweathered bedrock --
+# as opposed to a weathered marl/soil horizon that's merely associated
+# with a formation (Ironshore Formation Limestone is deliberately NOT
+# included here: tp_drawer.report_io's formation catalog treats it the
+# same way, wording its geological commentary as "Native Bedrock was not
+# encountered... consolidated native marl was encountered..." even when
+# Ironshore is the named final stratum). Matched case-insensitively
+# against pit.termination_reason, which excel_io.py already stores
+# upper-cased -- .lower() here just avoids relying on that detail.
+_TRUE_BEDROCK_FORMATIONS = {"cayman formation dolostone", "pedro castle formation dolostone"}
+
+
+def _bedrock_note(pit: TrialPit) -> str:
+    """Item 6 of the general notes box: whether this pit's own final
+    stratum represents true bedrock, purely from its termination_reason --
+    a pit that bottomed out in fill/soil, in Ironshore Formation Limestone
+    (see above), or wasn't assigned a final stratum at all (the
+    DEFAULT_TERMINATION_REASON sentinel) all read as "not encountered"."""
+    if pit.termination_reason.strip().lower() in _TRUE_BEDROCK_FORMATIONS:
+        return "BEDROCK WAS ENCOUNTERED."
+    return "BEDROCK WAS NOT ENCOUNTERED."
 
 
 def _groundwater_label(pit: TrialPit) -> str:
@@ -772,13 +844,16 @@ def _wrap_lines(text: str, width: int) -> str:
 def _draw_general_notes(ax, project: Project, pit: TrialPit) -> None:
     """The "NOTES:" box at the bottom-left of the page: standard
     boilerplate sentences with a few project-specific blanks filled in
-    (equipment, date, file reference, groundwater), plus one optional
-    extra note appended as its own numbered point."""
+    (equipment, date, file reference, groundwater, whether this pit struck
+    true bedrock -- see _bedrock_note), plus one optional extra note
+    appended as its own numbered point."""
     text = GENERAL_NOTES_BOILERPLATE.format(
+        equipment=_fmt(project.info.equipment).upper(),
         equipment_provider=_fmt_sentence(project.info.equipment_provider).upper(),
-        date=_fmt(project.info.date).upper(),
+        date=_fmt(project.info.site_work_completion_date).upper(),
         file_ref=_fmt(project.info.file_ref).upper(),
-        groundwater=_groundwater_short(pit).upper(),
+        groundwater_note=_groundwater_note(pit, verb="DURING"),
+        bedrock_note=_bedrock_note(pit),
     )
     if pit.extra_note:
         text += f"\n{len(text.splitlines()) + 1}) {pit.extra_note}"
@@ -821,7 +896,9 @@ def _load_rgb_image(path: Path) -> np.ndarray:
     return np.array(img)
 
 
-def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
+def _draw_title_block(
+    ax, project: Project, pit: TrialPit | None, cfg: Config, *, title_text: str | None = None, include_notes: bool = True
+) -> None:
     """The stack of labelled boxes down the right side of the page (NOTES,
     PROJECT, TITLE, DRAWN BY, SCALE, FILE, and the logo) -- drawn one
     explicit draw_box() call at a time, stacking each box directly below
@@ -831,24 +908,33 @@ def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
     remaining_height/notes_h/project_h below). Each box's fontsize and
     linespacing is its own named constant (see TITLE_BLOCK_*_FONTSIZE/
     LINESPACING near the top of this file) rather than a value shared
-    across boxes, so any one box's text density can be tuned on its own."""
+    across boxes, so any one box's text density can be tuned on its own.
+
+    `title_text`/`include_notes` exist for the Trial Pit Location Plan
+    cover sheet (see render_location_plan_page), which reuses this same
+    title block styling but with a fixed title instead of a per-pit one
+    and no NOTES box at all (its per-pit groundwater/equipment wording
+    doesn't make sense for a project-level page) -- `pit` is only ever
+    read for that default title and for NOTES, so it's None there."""
     page_h = cfg.page_size_in[1]
     top_y = page_h - MARGIN
     x = TITLE_BLOCK_X
     w = TITLE_BLOCK_W
 
-    notes_text = TITLE_BLOCK_NOTES_BOILERPLATE.format(
-        equipment=_fmt(project.info.equipment).upper(),
-        date=_fmt(project.info.date.upper()),
-        file_ref=_fmt(project.info.file_ref).upper(),
-        groundwater=_groundwater_short(pit).upper(),
-    )
-    notes_text = _wrap_lines(notes_text, width=48)
+    if include_notes:
+        notes_text = TITLE_BLOCK_NOTES_BOILERPLATE.format(
+            equipment=_fmt(project.info.equipment).upper(),
+            date=_fmt(project.info.site_work_completion_date).upper(),
+            file_ref=_fmt(project.info.file_ref).upper(),
+            groundwater_note=_groundwater_note(pit, verb="THROUGHOUT"),
+        )
+        notes_text = _wrap_lines(notes_text, width=48)
     project_text = _wrap_lines(
         "\n".join(filter(None, [project.info.project_name, project.info.street_address, project.info.block_and_parcel])) or "-",
         width=38,
     )
-    title_text = f"TRIAL PIT NO. {pit.number}"
+    if title_text is None:
+        title_text = f"TRIAL PIT NO. {pit.number}"
     drawn_by_text = project.info.drawn_by
     scale_text = project.info.scale_note
     file_text = _fmt(project.info.file_ref)
@@ -865,15 +951,18 @@ def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
     bottom_y = MARGIN
     available_height = top_y - bottom_y
     remaining_height = available_height - title_h - drawn_by_h - scale_h - file_h - logo_h
-    notes_h = max(remaining_height * 0.5, 1.0)
+    # No NOTES box -> PROJECT alone soaks up the space that would
+    # otherwise have been split between the two of them.
+    notes_h = max(remaining_height * 0.5, 1.0) if include_notes else 0.0
     project_h = max(remaining_height - notes_h, 1.0)
 
     # Walk down from the top of the page, placing each box directly below
     # the previous one -- `y -= height` before drawing means each box's
     # top edge sits exactly where the previous box's bottom edge was.
     y = top_y
-    y -= notes_h
-    draw_box(ax, x, y, w, notes_h, "NOTES:", notes_text, fontsize=TITLE_BLOCK_NOTES_FONTSIZE, linespacing=TITLE_BLOCK_NOTES_LINESPACING)
+    if include_notes:
+        y -= notes_h
+        draw_box(ax, x, y, w, notes_h, "NOTES:", notes_text, fontsize=TITLE_BLOCK_NOTES_FONTSIZE, linespacing=TITLE_BLOCK_NOTES_LINESPACING)
     y -= project_h
     draw_box(ax, x, y, w, project_h, "PROJECT:", f"GEOTECHNICAL INVESTIGATION\n{project_text.upper()}", fontsize=TITLE_BLOCK_PROJECT_FONTSIZE, linespacing=TITLE_BLOCK_PROJECT_LINESPACING)
     y -= title_h
@@ -905,8 +994,35 @@ def _draw_title_block(ax, project: Project, pit: TrialPit, cfg: Config) -> None:
     else:
         ax.text(x + w / 2, y + logo_h / 2, cfg.company_name, fontsize=8, fontweight="bold", va="center", ha="center")
 
-    # Outer border around the whole title block column.
-    ax.add_patch(Rectangle((x, y), w, top_y - y, fill=False, edgecolor="black", linewidth=1.2))
+    # Outer border around the whole title block column -- see
+    # TITLE_BLOCK_BORDER_LINEWIDTH above for why this is bolder than the
+    # plain Rectangle every box inside it uses.
+    ax.add_patch(
+        Rectangle(
+            (x, y),
+            w,
+            top_y - y,
+            fill=False,
+            edgecolor="black",
+            linewidth=TITLE_BLOCK_BORDER_LINEWIDTH,
+        )
+    )
+
+
+def _draw_page_border(ax, cfg: Config) -> None:
+    """The plain outer page frame every page gets, regardless of what
+    else is (or isn't) drawn inside it -- shared by render_pit_page and
+    render_location_plan_page."""
+    ax.add_patch(
+        Rectangle(
+            (MARGIN, MARGIN),
+            cfg.page_size_in[0] - 2 * MARGIN,
+            cfg.page_size_in[1] - 2 * MARGIN,
+            fill=False,
+            edgecolor="black",
+            linewidth=PAGE_BORDER_LINEWIDTH,
+        )
+    )
 
 
 def render_pit_page(fig, ax, project: Project, pit: TrialPit, cfg: Config, scale: float, templates: list[UnitTemplate]) -> None:
@@ -917,32 +1033,44 @@ def render_pit_page(fig, ax, project: Project, pit: TrialPit, cfg: Config, scale
     mirrors _new_axes's (fig, ax) return pair -- everything actually
     drawn here goes through `ax`, since matplotlib artists are added to
     an axes, not a figure, directly."""
-    ax.add_patch(
-        Rectangle(
-            (MARGIN, MARGIN),
-            cfg.page_size_in[0] - 2 * MARGIN,
-            cfg.page_size_in[1] - 2 * MARGIN,
-            fill=False,
-            edgecolor="black",
-            linewidth=1.5,
-        )
-    )
+    _draw_page_border(ax, cfg)
     _draw_stratigraphy_column(ax, pit, scale, templates)
     _draw_general_notes(ax, project, pit)
     _draw_title_block(ax, project, pit, cfg)
 
 
+def render_location_plan_page(fig, ax, project: Project, cfg: Config) -> None:
+    """Assembles the Trial Pit Location Plan cover sheet: the plain page
+    border and a project-level version of the title block (see
+    _draw_title_block's title_text/include_notes) -- no stratigraphy
+    column, no general notes box. Deliberately leaves the rest of the
+    page blank: this app has no site-plan/coordinate data to draw an
+    actual pit-location map from, so the page is meant to be finished by
+    hand afterward, the same "manually-completed page" pattern Appendix A
+    ("Site Figures") already uses elsewhere in this report package."""
+    _draw_page_border(ax, cfg)
+    _draw_title_block(ax, project, None, cfg, title_text="TRIAL PIT LOCATION PLAN", include_notes=False)
+
+
 def compute_project_scale(project: Project) -> float:
     """The one shared scale every pit's page must be drawn at (see
-    layout.py's compute_scale): whichever pit is deepest decides it, so
-    every pit's column ends up visually comparable on the same true-to-
-    life scale. Pulled out of render_project into its own function so a
-    caller that renders one pit's page at a time -- render_pit_pdf below,
-    used by the webapp's live-edit preview -- can compute this same
-    whole-project value without duplicating the "deepest pit wins"
-    logic, and without needing to actually render every other pit first."""
+    layout.py's compute_scale_preferring_fixed): whichever pit is deepest
+    decides it, so every pit's column ends up visually comparable on the
+    same true-to-life scale. Prefers FIXED_COLUMN_SCALE (a real,
+    nameable, "1 inch = 2 feet" scale) whenever the deepest pit fits
+    within COLUMN_HEIGHT_BUDGET at it, only falling back to zooming to
+    exactly fill the frame for a pit too deep for that fixed scale to fit
+    on the page -- see compute_scale_preferring_fixed's own docstring for
+    why (a shallow pit shouldn't get stretched to fill the whole page
+    just for being the deepest thing in its own project).
+
+    Pulled out of render_project into its own function so a caller that
+    renders one pit's page at a time -- render_pit_pdf below, used by the
+    webapp's live-edit preview -- can compute this same whole-project
+    value without duplicating the "deepest pit wins" logic, and without
+    needing to actually render every other pit first."""
     max_depth = max((pit.total_depth_in for pit in project.pits), default=Decimal(0))
-    return compute_scale(max_depth, COLUMN_HEIGHT_BUDGET)
+    return compute_scale_preferring_fixed(max_depth, COLUMN_HEIGHT_BUDGET, FIXED_COLUMN_SCALE)
 
 
 def render_pit_pdf(
@@ -968,6 +1096,17 @@ def render_pit_pdf(
     those neighbors itself."""
     fig, ax = _new_axes(cfg)
     render_pit_page(fig, ax, project, pit, cfg, scale, templates)
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+def render_location_plan_pdf(project: Project, cfg: Config, output_path: str | Path) -> None:
+    """Renders the Trial Pit Location Plan cover sheet (see
+    render_location_plan_page) to its own single-page PDF -- one per
+    project, not one per pit, since it's just the title block on an
+    otherwise blank page, independent of any individual pit's own data."""
+    fig, ax = _new_axes(cfg)
+    render_location_plan_page(fig, ax, project, cfg)
     fig.savefig(output_path)
     plt.close(fig)
 

@@ -12,12 +12,20 @@ from .conftest import DEFAULT_HEADER, make_workbook
 @pytest.fixture
 def client():
     app.config.update(TESTING=True)
+    # Snapshot which job folders already exist *before* the test runs, so
+    # teardown only removes ones this test itself created -- OUTPUTS_DIR
+    # is the same outputs/ folder a real, locally-running instance of the
+    # app uses for actual jobs. Wiping every child unconditionally (the
+    # previous behavior here) deletes real user data the instant anyone
+    # runs the test suite against a checkout that also has the webapp
+    # running locally with real jobs in it.
+    pre_existing = set(OUTPUTS_DIR.iterdir()) if OUTPUTS_DIR.exists() else set()
     with app.test_client() as c:
         yield c
-    # Clean up any job folders created during the test.
     if OUTPUTS_DIR.exists():
         for child in OUTPUTS_DIR.iterdir():
-            shutil.rmtree(child, ignore_errors=True)
+            if child not in pre_existing:
+                shutil.rmtree(child, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

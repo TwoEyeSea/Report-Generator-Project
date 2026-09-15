@@ -1,29 +1,122 @@
 [
   {
-    "name": "ORGANIC TOPSOIL",
-    "description": "Loose brown, dark-brown, organic topsoil. Loose compressible organic silt (\u22640.002\u201d) soil with inclusions of vegetation and roots. Uniformly graded compressible organic silt is not suitable for bearing, and not suitable for use within the ground-filling profile. Suitable for agricultural and landscaping use.",
-    "hatch_pattern": "organic_frond",
+    "name": "Topsoil",
+    "description": "Loose brown, dark-brown, organic soil. Compressible organic silt (\u22640.002\u201d) with inclusions of vegetation and roots. Uniformly-graded, compressible organic soil, not suitable for bearing, and not suitable for use within the ground-filling profile. Suitable for agricultural and landscaping use.",
+    "hatch_pattern": "organic",
     "hatch_angle": 0.0,
-    "hatch_size": 1.0,
-    "background_color": "none",
-    "line_color": "#000000"
+    "hatch_size": 0.6,
+    "background_color": "#c78529",
+    "line_color": "#5e400d",
+    "is_native": true
   },
   {
     "name": "Beach Sand",
-    "description": "",
+    "description": "Loose, off-white, pinkish-white inorganic soil. Predominantly rounded coarse sand grains (0.025\u201d to 0.08\u201d dia.). Occasional coralline debris and conch shells (up to 2\u2019-10\u201d observed). Roots and minor organic contaminants from the surrounding foliage present within the first 1\u2019-6\u201d below grade on average. Uniformly-graded soil lacking the gradation to facilitate adequate compaction. Suitability for reuse within the ground filling profile subject to engineer\u2019s discretion. If the large coralline debris is sieved from the soil, the high-quality sand may have the potential to be sold.",
     "hatch_pattern": "dots",
     "hatch_angle": 0.0,
     "hatch_size": 0.5,
     "background_color": "#f0c85c",
-    "line_color": "#000000"
+    "line_color": "#000000",
+    "is_native": true
   },
   {
-    "name": "Cayman Rock",
-    "description": "test",
+    "name": "Cayman Rock Fill",
+    "description": "Consolidated, orange-yellow and greyish-white inorganic soil. Predominantly Cobble supported soil (2.5\u201d up to 8\u201d dia.), intermixed with coarse gravel (0.8\u201d up to 2.5\u201d dia.) and coarse sand (0.025\u201d up to 0.08\u201d dia.). Well-graded engineered soil, suitable for reuse within the ground filling profile.",
     "hatch_pattern": "gravel",
     "hatch_angle": 0.0,
     "hatch_size": 0.6,
     "background_color": "#ffd270",
-    "line_color": "#000000"
+    "line_color": "#000000",
+    "is_native": false
+  },
+  {
+    "name": "Terra Rossa",
+    "description": "Loose, crimson, reddish brown inorganic soil. Predominantly consisting of inorganic silt grains (\u22640.002\"). Uniformly-graded compressible material. This soil is not suitable for reuse within the ground-filling profile. Potential to be used for agriculture due to free draining properties.",
+    "hatch_pattern": "dots",
+    "hatch_angle": 0.0,
+    "hatch_size": 0.7,
+    "background_color": "#920202",
+    "line_color": "#ffffff",
+    "is_native": true
+  },
+  {
+    "name": "Marl Fill",
+    "description": "consolidated, off-white, inorganic soil. Predominantly consisting of angular, medium sized gravels (0.24\u201d through to 0.8\u201d dia.).  Secondary constituents of fine sand (0.008\u201d through to 0.024\u201d dia.). Well-graded soil suitable for reuse within the ground-filling profile, not suitable for immediate contact with basement walls due to water retentive properties.",
+    "hatch_pattern": "native_marl",
+    "hatch_angle": 45.0,
+    "hatch_size": 0.7,
+    "background_color": "#ffe5e5",
+    "line_color": "#000000",
+    "is_native": false
+  },
+  {
+    "name": "Mixed Fill",
+    "description": "Loose, orange-brown and greyish-white contaminated soil. Predominantly cobble-sized grains (2.5\u201d up to 8\u201d dia.) intermixed with coarse gravel (0.8\u201d up to 2.5\u201d dia.) and coarse sand (0.025\u201d up to 0.08\u201d dia.). High quantity of organic silt (\u22640.002\u201d). Contaminated, gap-graded soil lacking the gradation to promote sufficient compaction. Soil not suitable for reuse within the ground filling profile.",
+    "hatch_pattern": "gravel",
+    "hatch_angle": 0.0,
+    "hatch_size": 0.6,
+    "background_color": "#baa47d",
+    "line_color": "#000000",
+    "is_native": false
+  },
+  {
+    "name": "Peat",
+    "description": "Loose, dense, spongy, fibrous, dark brown, organic soil. Native peat layer, primarily consisting of fine fibrous organic material (\u22650.002\") with branches present (up to 2\u201d dia.). Highly compressible soil not suitable for reuse within the ground filling profile and presents a high risk of differential settlement which can lead to significant structural damage.",
+    "hatch_pattern": "organic_frond",
+    "hatch_angle": 0.0,
+    "hatch_size": 1.0,
+    "background_color": "#45210d",
+    "line_color": "#fcfcfc",
+    "is_native": true
+  },
+  {
+    "name": "Shot Rock Fill",
+    "description": "Loose, greyish white, tan, light brown inorganic soil. Predominantly angular boulders (up to 3\u2019-0\u201d length) intermixed with secondary constituents of coarse gravel (0.8\u201d to 2.4\u201d dia. grains). Tertiary constituents of coarse sand (0.025\u201d up to 0.08\u201d dia.). Severely gap-graded fill. Suitability for reuse within the ground filling profile subject to engineer\u2019s discretion due to insufficient compaction capacity.",
+    "hatch_pattern": "gravel",
+    "hatch_angle": 0.0,
+    "hatch_size": 1.1,
+    "background_color": "#ffed94",
+    "line_color": "#000000",
+    "is_native": false
+  },
+  {
+    "name": "Crusher Run Fill",
+    "description": "Consolidated, yellow, orangey-yellow inorganic soil. Predominantly medium-sized gravels (0.24\u201d to 0.8\u201d dia. grains). Secondary constituents of coarse sand (0.024\u201d to 0.08\u201d dia. grains). Well-graded engineered fill, suitable for reuse within the ground filling profile.",
+    "hatch_pattern": "gravel",
+    "hatch_angle": 0.0,
+    "hatch_size": 0.4,
+    "background_color": "#ffc547",
+    "line_color": "#000000",
+    "is_native": false
+  },
+  {
+    "name": "Native Marl",
+    "description": "Consolidated, off-white, inorganic soil. Predominantly angular, medium sized gravels (0.24\u201d through to 0.8\u201d dia.). Secondary constituents of fine sand (0.008\u201d through to 0.024\u201d dia.). Minor inclusions of inorganic silt (\u22640.002\u201d) grains leading to water retentive properties, as well as cohesion and malleability when wet.  Well-graded soil, suitable for reuse within ground-filling profile, not suitable for immediate contact with basement walls due to water retentive properties.",
+    "hatch_pattern": "native_marl",
+    "hatch_angle": 45.0,
+    "hatch_size": 1.0,
+    "background_color": "#ffd1d1",
+    "line_color": "#000000",
+    "is_native": true
+  },
+  {
+    "name": "Weathered Dolostone",
+    "description": "Friable cemented exterior of the bedrock, forcibly scraped off with the excavator bucket.",
+    "hatch_pattern": "brick",
+    "hatch_angle": 0.0,
+    "hatch_size": 1.0,
+    "background_color": "#a8f1ff",
+    "line_color": "#000000",
+    "is_native": true
+  },
+  {
+    "name": "Silty Marl",
+    "description": "Consolidated, off-white, inorganic soil. Predominantly angular, medium sized gravels (0.24\u201d through to 0.8\u201d dia.). Secondary constituents of fine sand (0.008\u201d through to 0.024\u201d dia.). Significant inclusions of inorganic silt (\u22640.002\u201d) grains. nodes of silt are disseminated within this layer leading to high water retention and compressibility when wet.  Gap-graded compressible soil,  not suitable for reuse within ground-filling profile and presents a high risk of differential settlement which can lead to significant structural damage ,",
+    "hatch_pattern": "native_marl",
+    "hatch_angle": 45.0,
+    "hatch_size": 0.3,
+    "background_color": "#d4ffd1",
+    "line_color": "#000000",
+    "is_native": true
   }
 ]

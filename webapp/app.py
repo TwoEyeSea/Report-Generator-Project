@@ -22,25 +22,63 @@ has to be saved to disk and re-loaded on the next request; that's what
 the job-directory/project.json mechanism below is for.
 """
 
+import io
 import json
 import re
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 import pymupdf
 import pypdf
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
 
-from tp_drawer.catalog import UnitTemplate, hydrate_descriptions, load_catalog, save_catalog
+from tp_drawer.catalog import UnitTemplate, hydrate_descriptions, load_catalog, load_formation_catalog, load_foundation_catalog, save_catalog
 from tp_drawer.config import Config
-from tp_drawer.drawing import compute_project_scale, render_hatch_swatch, render_pit_pdf
+from tp_drawer.drawing import compute_project_scale, render_hatch_swatch, render_location_plan_pdf, render_pit_pdf
 from tp_drawer.excel_io import read_project, write_template
 from tp_drawer.hatch_patterns import PATTERN_REGISTRY
 from tp_drawer.models import Project, project_from_dict, project_to_dict
+from tp_drawer.pdf_convert import convert_to_pdf
+from tp_drawer.photo_gallery_io import generate_appendix_b, is_image_file
+from tp_drawer.report_io import build_report_context, generate_report, render_docx_template
+
+APPENDIX_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "data"
+APPENDIX_LETTERS = ("a", "b", "c", "d")
+# Short, filename-friendly title for each appendix -- used to build names
+# like "Appendix A Site Figures" for the export feature (see
+# _export_basename/export below). Matches each appendix's own in-document
+# subtitle except Appendix B, where "Photo Gallery" reads better in a
+# filename than the document's own "Photographic Record" heading.
+APPENDIX_TITLES = {
+    "a": "Site Figures",
+    "b": "Photo Gallery",
+    "c": "Trial Pit Logs",
+    "d": "Limitations",
+}
+# Appendices that also get a PDF copy alongside their .docx in the export
+# zip -- B is left out since its captions/photos are the one appendix
+# likely to still need hand review before it's considered final.
+PDF_APPENDIX_LETTERS = {"a", "c", "d"}
 
 OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
+
+# Characters that are illegal on Windows (or just awkward cross-platform)
+# in a filename -- stripped from a project name before it's dropped into
+# an exported file's download name (see _export_basename).
+_FILENAME_UNSAFE_RE = re.compile(r'[<>:"/\\|?*]')
+
+
+def _export_basename(project: Project) -> str:
+    """The "<Project Name>" prefix every exported file/deliverable name
+    starts with (see the export route below), e.g. "Dilbert Home" ->
+    "Dilbert Home TP Logs.pdf". Falls back to a generic placeholder for
+    a project whose name is blank or entirely made of unsafe characters,
+    rather than producing a filename that starts with a bare extension."""
+    cleaned = _FILENAME_UNSAFE_RE.sub("", project.info.project_name).strip()
+    return cleaned or "Untitled Project"
 
 # ADVANCED TECHNIQUE -- validating input with a regex, for security:
 # _JOB_ID_RE only matches a string that's exactly 32 lowercase hex
@@ -261,8 +299,10 @@ def edit(job_id: str):
         }
         for i, pit in enumerate(project.pits)
     ]
-    pdf_url = url_for("job_file", job_id=job_id, filename="log.pdf")
-    return render_template("edit.html", job_id=job_id, pits=pits, pdf_url=pdf_url)
+    export_url = url_for("export", job_id=job_id)
+    photo_dir = _photo_dir(job_dir)
+    photos = sorted(p.name for p in photo_dir.iterdir() if p.is_file() and is_image_file(p)) if photo_dir.is_dir() else []
+    return render_template("edit.html", job_id=job_id, pits=pits, export_url=export_url, photos=photos)
 
 
 @app.route("/edit/<job_id>/update", methods=["POST"])
@@ -327,13 +367,141 @@ def edit_update(job_id: str):
     return jsonify({"pit_index": pit_index, "image_url": image_url})
 
 
+def _photo_dir(job_dir: Path) -> Path:
+    """Where a job's uploaded site photos live -- Appendix B's originals
+    (photo_gallery_io.py resizes/compresses its own copies into a
+    _processed/ subfolder of this same directory, alongside them)."""
+    return job_dir / "photos"
+
+
+@app.route("/edit/<job_id>/photos", methods=["POST"])
+def upload_photos(job_id: str):
+    """Saves whatever image files were submitted (the edit page's photo
+    upload form allows selecting several at once) into this job's photo
+    folder, for Appendix B to later match by filename -- see
+    tp_drawer.photo_gallery_io. Re-uploading a file with the same name
+    simply overwrites it (e.g. to replace a mis-named photo) rather than
+    erroring or duplicating. Non-image files are silently skipped rather
+    than rejecting the whole upload, since a folder picker can easily
+    sweep up something like a .DS_Store or Thumbs.db alongside the
+    real photos."""
+    job_dir = _require_job_dir(job_id)
+    photo_dir = _photo_dir(job_dir)
+    photo_dir.mkdir(parents=True, exist_ok=True)
+    for upload in request.files.getlist("photos"):
+        name = Path(upload.filename or "").name  # strip any client-supplied path component
+        if name and is_image_file(Path(name)):
+            upload.save(photo_dir / name)
+    return redirect(url_for("edit", job_id=job_id))
+
+
+@app.route("/edit/<job_id>/photos/delete", methods=["POST"])
+def delete_photo(job_id: str):
+    """Removes one previously-uploaded photo by filename, from the edit
+    page's list of currently-uploaded photos."""
+    job_dir = _require_job_dir(job_id)
+    name = Path(request.form.get("filename", "")).name
+    if name:
+        photo_path = _photo_dir(job_dir) / name
+        if photo_path.is_file():
+            photo_path.unlink()
+    return redirect(url_for("edit", job_id=job_id))
+
+
+def _write_appendices_to_zip(zf: zipfile.ZipFile, project: Project, job_dir: Path, base_context: dict) -> None:
+    """Renders all 4 appendices fresh and writes each into `zf`, named
+    "<Project Name> Appendix <Letter> <Title>.docx" (see APPENDIX_TITLES)
+    -- shared by the "appendices" and "all" export combinations below, so
+    the naming/rendering logic exists in exactly one place. A, C, and D
+    (see PDF_APPENDIX_LETTERS) also get a PDF copy alongside their docx.
+
+    A PDF conversion failure (LibreOffice missing, or the conversion
+    itself failing) doesn't fail the whole export -- it's better to hand
+    back every docx than none of it over one appendix's PDF not being
+    possible right now."""
+    base = _export_basename(project)
+    for letter in APPENDIX_LETTERS:
+        appendix_path = job_dir / f"appendix_{letter}.docx"
+        template_path = APPENDIX_TEMPLATES_DIR / f"appendix_{letter}_template.docx"
+        if letter == "b":
+            generate_appendix_b(project, _photo_dir(job_dir), base_context, appendix_path)
+        else:
+            render_docx_template(template_path, base_context, appendix_path)
+        display_name = f"{base} Appendix {letter.upper()} {APPENDIX_TITLES[letter]}"
+        zf.write(appendix_path, f"{display_name}.docx")
+        if letter in PDF_APPENDIX_LETTERS:
+            try:
+                pdf_path = convert_to_pdf(appendix_path)
+            except Exception:
+                continue
+            zf.write(pdf_path, f"{display_name}.pdf")
+
+
+_EXPORT_CHOICES = {"tp_logs", "report", "appendices", "site_plan", "all"}
+
+
+@app.route("/export/<job_id>")
+def export(job_id: str):
+    """The edit page's single, consolidated download endpoint: `what`
+    (from the export dropdown's <select name="what">) picks one of five
+    combinations, each downloaded under a name that starts with the
+    project's own name (see _export_basename) so a user working several
+    projects can tell their downloads apart in a browser's downloads
+    list. Every docx/PDF is rendered fresh from the job's current project
+    data on every request (cheap enough not to bother caching), same
+    reasoning the old separate report/report_bundle routes this replaces
+    already used."""
+    job_dir = _require_job_dir(job_id)
+    project = _load_project(job_dir)
+    what = request.args.get("what", "all")
+    if what not in _EXPORT_CHOICES:
+        abort(400)
+    base = _export_basename(project)
+    formation_templates = load_formation_catalog()
+    foundation_options = load_foundation_catalog()
+
+    if what == "tp_logs":
+        return send_file(job_dir / "log.pdf", as_attachment=True, download_name=f"{base} TP Logs.pdf")
+
+    if what == "report":
+        report_path = job_dir / "report.docx"
+        generate_report(project, report_path, formation_templates, foundation_options)
+        return send_file(report_path, as_attachment=True, download_name=f"{base} Report.docx")
+
+    if what == "site_plan":
+        location_plan_path = job_dir / "trial_pit_location_plan.pdf"
+        render_location_plan_pdf(project, Config(), location_plan_path)
+        return send_file(location_plan_path, as_attachment=True, download_name=f"{base} Site Plan Title Block.pdf")
+
+    base_context = build_report_context(project, formation_templates, foundation_options)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        if what == "appendices":
+            _write_appendices_to_zip(zf, project, job_dir, base_context)
+            zip_name = f"{base} Appendices.zip"
+        else:  # "all"
+            zf.write(job_dir / "log.pdf", f"{base} TP Logs.pdf")
+            report_path = job_dir / "report.docx"
+            generate_report(project, report_path, formation_templates, foundation_options)
+            zf.write(report_path, f"{base} Report.docx")
+            _write_appendices_to_zip(zf, project, job_dir, base_context)
+            location_plan_path = job_dir / "trial_pit_location_plan.pdf"
+            render_location_plan_pdf(project, Config(), location_plan_path)
+            zf.write(location_plan_path, f"{base} Site Plan Title Block.pdf")
+            zip_name = f"{base} Full Export.zip"
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=zip_name, mimetype="application/zip")
+
+
 @app.route("/outputs/<job_id>/<filename>")
 def job_file(job_id: str, filename: str):
-    """Serves one file out of a job's folder (a preview PNG or the final
-    PDF) -- every image_url and pdf_url built above ultimately points
-    here. Both URL parts are validated against the regexes defined near
-    the top of this file before being used to build a filesystem path --
-    see the _JOB_ID_RE comment above for why that matters."""
+    """Serves one file out of a job's folder (a pit preview PNG, or --
+    though the edit page's own export dropdown downloads it by a nicer
+    name via /export/<job_id> instead -- the raw combined log.pdf).
+    Every image_url built above ultimately points here. Both URL parts
+    are validated against the regexes defined near the top of this file
+    before being used to build a filesystem path -- see the _JOB_ID_RE
+    comment above for why that matters."""
     if not _JOB_ID_RE.match(job_id) or not _OUTPUT_FILENAME_RE.match(filename):
         abort(404)
     job_dir = _job_dir(job_id)
@@ -370,12 +538,15 @@ def catalog_page():
     return render_template("catalog.html", templates=templates, pattern_registry=_pattern_registry_context())
 
 
+_IS_NATIVE_FORM_VALUES = {"native": True, "made": False}
+
+
 def _unit_template_from_form(name: str, description: str) -> UnitTemplate:
     """Shared by catalog_add and catalog_update below: reads the hatch
-    styling fields (pattern/angle/size/colors) out of the submitted form
-    and builds a UnitTemplate from them, so both routes construct a
-    template the exact same way rather than duplicating this field-by-
-    field extraction twice."""
+    styling fields (pattern/angle/size/colors) and the native/made radio
+    choice out of the submitted form and builds a UnitTemplate from them,
+    so both routes construct a template the exact same way rather than
+    duplicating this field-by-field extraction twice."""
     background_color = "none" if request.form.get("background_nofill") else request.form.get("background_color", "none")
     return UnitTemplate(
         name=name,
@@ -385,6 +556,10 @@ def _unit_template_from_form(name: str, description: str) -> UnitTemplate:
         hatch_size=request.form.get("hatch_size", type=float) or 1.0,
         background_color=background_color,
         line_color=request.form.get("line_color", "black"),
+        # Neither radio checked (e.g. a template saved before this field
+        # existed, left alone) -> None, same "not set yet" state load_catalog
+        # already gives an entry with no is_native key at all.
+        is_native=_IS_NATIVE_FORM_VALUES.get(request.form.get("is_native", "")),
     )
 
 

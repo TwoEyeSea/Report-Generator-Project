@@ -19,7 +19,7 @@ and Python builds the machinery to create, print, and compare filled-in
 forms for you.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from decimal import Decimal
 
 # The caption drawn under the last unit's landing when a pit's final soil
@@ -36,11 +36,19 @@ DEFAULT_TERMINATION_REASON = "TERMINATION STRATA UNDETERMINED"
 
 @dataclass
 class Layer:
-    """One band of soil in a trial pit, e.g. "10 inches of Organic Topsoil"."""
+    """One band of soil in a trial pit, e.g. "10 inches of Organic Topsoil".
+
+    is_native mirrors description: hydrated in from the matching unit
+    catalog entry (see catalog.hydrate_descriptions) rather than read off
+    the input sheet directly. None means "no catalog entry for this unit
+    name yet, or its native/made ground status was never set" -- the
+    report renders that as an explicit placeholder rather than guessing
+    (see report_io.py's _build_strata)."""
 
     name: str
     thickness_in: Decimal
     description: str = ""
+    is_native: bool | None = None
 
 
 @dataclass
@@ -77,7 +85,28 @@ class TrialPit:
 @dataclass
 class ProjectInfo:
     """Job-level metadata shown in the log's title block -- address, date,
-    equipment used, who drew it, etc. -- shared by every pit in the project."""
+    equipment used, who drew it, etc. -- shared by every pit in the project.
+
+    `date` is the report-writing date; `site_work_completion_date` is when
+    the trial pits were actually dug -- the two are often different, and
+    the log's own NOTES boxes (see drawing.py's _draw_general_notes and
+    _draw_title_block) intentionally use site_work_completion_date, not
+    date, for their "excavation/investigation carried out on ..." lines.
+
+    client, engineer_name, proposed_structures, and recommended_foundations
+    aren't used by the trial pit log drawing at all -- they exist only to
+    feed the geotechnical report (see report_io.py). Along with
+    site_work_completion_date, they're read from the input sheet the same
+    label-driven way as every other header field (see excel_io.py's
+    _build_project_info), but are treated as optional there rather than
+    required, so an older input sheet built before the report feature
+    existed still loads fine -- these fields just come back blank.
+
+    recommended_foundations is a list, not a single string, because the
+    input sheet can name more than one candidate foundation system (its
+    "Option 1"/"Option 2"/... rows -- see excel_io.py) -- report_io.py
+    turns one name into a plain "Recommended Foundation: X" subsection and
+    two or more into a numbered "Option 1 - X"/"Option 2 - Y"/... series."""
 
     date: str = ""
     project_number: str = ""
@@ -89,6 +118,11 @@ class ProjectInfo:
     drawn_by: str = "MAM"
     file_ref: str = ""
     scale_note: str = "N.T.S."
+    client: str = ""
+    engineer_name: str = ""
+    site_work_completion_date: str = ""
+    proposed_structures: str = ""
+    recommended_foundations: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -123,7 +157,12 @@ def project_to_dict(project: Project) -> dict:
             {
                 "number": pit.number,
                 "layers": [
-                    {"name": layer.name, "thickness_in": str(layer.thickness_in), "description": layer.description}
+                    {
+                        "name": layer.name,
+                        "thickness_in": str(layer.thickness_in),
+                        "description": layer.description,
+                        "is_native": layer.is_native,
+                    }
                     for layer in pit.layers
                 ],
                 "groundwater_depth_in": str(pit.groundwater_depth_in) if pit.groundwater_depth_in is not None else None,
@@ -138,14 +177,32 @@ def project_to_dict(project: Project) -> dict:
 def project_from_dict(data: dict) -> Project:
     """The reverse of project_to_dict: rebuild a real Project (with proper
     Decimal fields, not strings) from the plain dict that was loaded back
-    out of project.json."""
+    out of project.json.
+
+    The info sub-dict is filtered down to ProjectInfo's current field
+    names before unpacking: a project.json saved before a ProjectInfo
+    field was renamed or removed (e.g. recommended_foundation ->
+    recommended_foundations) would otherwise still carry the old key and
+    make `ProjectInfo(**data["info"])` fail with an unexpected-keyword
+    TypeError. Dropping unknown keys means an old saved job just loses
+    that one field's saved value (falling back to its dataclass default)
+    instead of failing to load at all."""
+    known_info_fields = {f.name for f in fields(ProjectInfo)}
+    info_data = {key: value for key, value in data["info"].items() if key in known_info_fields}
     return Project(
-        info=ProjectInfo(**data["info"]),
+        info=ProjectInfo(**info_data),
         pits=[
             TrialPit(
                 number=pit["number"],
                 layers=[
-                    Layer(name=layer["name"], thickness_in=Decimal(layer["thickness_in"]), description=layer["description"])
+                    Layer(
+                        name=layer["name"],
+                        thickness_in=Decimal(layer["thickness_in"]),
+                        description=layer["description"],
+                        # .get(..., None): project.json files saved before
+                        # is_native existed just don't have this key.
+                        is_native=layer.get("is_native"),
+                    )
                     for layer in pit["layers"]
                 ],
                 groundwater_depth_in=Decimal(pit["groundwater_depth_in"]) if pit["groundwater_depth_in"] is not None else None,

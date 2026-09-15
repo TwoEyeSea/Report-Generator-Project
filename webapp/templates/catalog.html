@@ -12,6 +12,16 @@
 
     <p><a class="link" href="{{ url_for('index') }}">&larr; Back</a></p>
 
+    {% macro native_field(uid, is_native) %}
+      <div class="field">
+        <label>Ground type</label>
+        <div class="radio-row">
+          <label><input type="radio" name="is_native" value="native" data-uid="{{ uid }}" {% if is_native == True %}checked{% endif %}> Native</label>
+          <label><input type="radio" name="is_native" value="made" data-uid="{{ uid }}" {% if is_native == False %}checked{% endif %}> Manmade</label>
+        </div>
+      </div>
+    {% endmacro %}
+
     {% macro hatch_fields(uid, pattern, angle, size, bg, line) %}
       <div class="field">
         <label>Hatch pattern</label>
@@ -53,6 +63,7 @@
           <label for="description">Description</label>
           <textarea id="description" name="description" rows="3"></textarea>
         </div>
+        {{ native_field("new", none) }}
         {{ hatch_fields("new", "none", 0.0, 1.0, "none", "black") }}
         <div class="actions">
           <button type="submit">Add</button>
@@ -73,6 +84,7 @@
               <label>Description</label>
               <textarea name="description" rows="3">{{ t.description }}</textarea>
             </div>
+            {{ native_field(loop.index0, t.is_native) }}
             {{ hatch_fields(loop.index0, t.hatch_pattern, t.hatch_angle, t.hatch_size, t.background_color, t.line_color) }}
             <div class="actions">
               <button type="submit">Save</button>

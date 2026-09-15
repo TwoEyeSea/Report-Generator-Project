@@ -12,10 +12,47 @@
         <h1>Generated trial pit logs</h1>
         <p class="subtitle">{{ pits|length }} trial pit(s). Edit a unit's description below and its preview updates automatically.</p>
       </div>
-      <a class="download-button" href="{{ pdf_url }}" download>Download PDF</a>
+      <form class="download-actions" action="{{ export_url }}" method="get">
+        <select name="what" class="export-select">
+          <option value="tp_logs">Trial Pit Log PDFs</option>
+          <option value="report">Report (Word doc)</option>
+          <option value="appendices">Appendices (Word docs)</option>
+          <option value="site_plan">Site Plan Title Block (PDF)</option>
+          <option value="all" selected>All the above (zip)</option>
+        </select>
+        <button type="submit" class="download-button">Export</button>
+      </form>
     </div>
 
     <p><a class="link" href="{{ url_for('index') }}">&larr; Generate another</a></p>
+
+    <div class="panel">
+      <h2 class="panel-title">Appendix B photos</h2>
+      <p class="subtitle">Upload site photos for the photo gallery appendix. Name each trial pit's photos "TP&lt;number&gt; Dug" / "TP&lt;number&gt; Spoils" (e.g. "TP1 Dug.jpg") so they land in the right slot automatically -- any other photo is added as an extra, captioned from its own filename.</p>
+      <form action="{{ url_for('upload_photos', job_id=job_id) }}" method="post" enctype="multipart/form-data">
+        <div class="field">
+          <input type="file" name="photos" accept="image/*" multiple required>
+        </div>
+        <div class="actions">
+          <button type="submit">Upload</button>
+        </div>
+      </form>
+      {% if photos %}
+        <ul class="photo-list">
+          {% for filename in photos %}
+            <li>
+              {{ filename }}
+              <form action="{{ url_for('delete_photo', job_id=job_id) }}" method="post" class="delete-form">
+                <input type="hidden" name="filename" value="{{ filename }}">
+                <button type="submit" class="link-button">Remove</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="subtitle">No photos uploaded yet.</p>
+      {% endif %}
+    </div>
 
     <div class="pit-list">
       {% for pit in pits %}

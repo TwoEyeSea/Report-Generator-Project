@@ -32,6 +32,9 @@ from tp_drawer.units import parse_feet_inches
 # (e.g. "street_address"). Having this mapping as one dict, rather than a
 # chain of if/elif checks, makes it a single place to look to see every
 # header field the reader understands, and to add a new one.
+#
+# These are the fields the trial pit log drawing actually needs, so a
+# sheet missing any of them is rejected outright (see _build_project_info).
 _HEADER_ALIASES = {
     "date": "date",
     "project number": "project_number",
@@ -41,6 +44,21 @@ _HEADER_ALIASES = {
     "equipment provider": "equipment_provider",
     "equipment": "equipment",
 }
+# Extra header fields that only the geotechnical report (report_io.py)
+# uses -- optional, so a sheet from before the report feature existed
+# still loads fine; a missing one just comes back as "". Note the sheet
+# label "AMR Engineer" doesn't lowercase-match its attribute name the way
+# the required fields above do, hence this being a separate dict rather
+# than just folding these into _HEADER_ALIASES.
+_OPTIONAL_HEADER_ALIASES = {
+    "client": "client",
+    "amr engineer": "engineer_name",
+    "site work completion date": "site_work_completion_date",
+    "proposed structure/s": "proposed_structures",
+}
+# Header labels (besides "date") whose cell value should get the same
+# datetime -> "23-May-2026" treatment in _format_header_value.
+_DATE_LABELS = {"date", "site work completion date"}
 # Words a user might type in the groundwater cell to mean "we dug the pit
 # and didn't hit water" -- treated as "no depth recorded" rather than
 # text we'd try (and fail) to parse as a feet-inches measurement.
@@ -102,7 +120,7 @@ def _format_header_value(label_key: str, value) -> str:
     """
     if value is None:
         return ""
-    if label_key == "date" and isinstance(value, datetime.date):
+    if label_key in _DATE_LABELS and isinstance(value, datetime.date):
         return value.strftime("%d-%B-%Y")
     return str(value).strip()
 
@@ -149,6 +167,10 @@ def _build_project_info(header_fields: dict[str, str]) -> ProjectInfo:
     # into ProjectInfo(**kwargs) -- same "unpack a dict into keyword
     # arguments" trick used in catalog.py's load_catalog.
     kwargs = {attr: header_fields[label] for label, attr in _HEADER_ALIASES.items()}
+    # Optional report-only fields: pulled in only if the sheet actually has
+    # them (see _OPTIONAL_HEADER_ALIASES above) -- absent ones just leave
+    # ProjectInfo's own "" default in place.
+    kwargs.update({attr: header_fields[label] for label, attr in _OPTIONAL_HEADER_ALIASES.items() if label in header_fields})
     info = ProjectInfo(**kwargs)
     if not info.file_ref:
         # file_ref isn't its own header field on the sheet -- if it comes
@@ -213,6 +235,41 @@ def _find_table_rows(ws, header_row: int) -> tuple[list[int], int, int | None]:
     return layer_rows, groundwater_row, final_strata_row
 
 
+# Matches a label like "Option 1", "Option 2", ... "Option 12" (as on the
+# reference "Project Data.xlsx" sheet, which has a "Recommended
+# Foundation:" section with one "Option N:" row per candidate foundation
+# system after the trial pit data). Open-ended (any number, not just 1 and
+# 2) for the same reason pit columns and layer rows aren't hardcoded to a
+# fixed count elsewhere in this file -- a project might recommend a third
+# option someday, and the sheet shouldn't need code changes to support it.
+_OPTION_LABEL_RE = re.compile(r"^option\s+(\d+)$")
+
+
+def _read_recommended_foundations(ws, start_row: int) -> list[str]:
+    """Best-effort scan of the rows below the per-pit table for "Option N:"
+    rows, returning their values in Option-number order with any blank
+    ones dropped (e.g. a sheet with "Option 1: Strip Footings" and an
+    empty "Option 2:" yields just ["Strip Footings"]). Unlike
+    _read_header_and_pit_row, this has no boundary row to stop at, so it
+    just walks a generous fixed window -- a sheet with no such rows at all
+    (e.g. one from before the report feature existed) yields an empty
+    list rather than an error."""
+    numbered_values: list[tuple[int, str]] = []
+    for row in range(start_row, start_row + 100):
+        label = ws.cell(row=row, column=1).value
+        if label is None or str(label).strip() == "":
+            continue
+        match = _OPTION_LABEL_RE.match(_norm(str(label)))
+        if match is None:
+            continue
+        value = ws.cell(row=row, column=2).value
+        text = _format_header_value("option", value)
+        if text:
+            numbered_values.append((int(match.group(1)), text))
+    numbered_values.sort(key=lambda pair: pair[0])
+    return [text for _, text in numbered_values]
+
+
 def _parse_optional_depth(value, coordinate: str) -> Decimal | None:
     """Like units.parse_feet_inches, but for a cell that's allowed to be
     blank or say "-"/"N/A" (meaning "groundwater wasn't encountered") --
@@ -252,6 +309,8 @@ def read_project(path: str | Path) -> Project:
     # more clearly than reaching into a tuple by numeric index
     # (result[0], result[1], result[2]).
     layer_rows, groundwater_row, final_strata_row = _find_table_rows(ws, header_row)
+
+    info.recommended_foundations = _read_recommended_foundations(ws, (final_strata_row or groundwater_row) + 1)
 
     pits: list[TrialPit] = []
     # Outer loop: once per pit column (left to right across the sheet).

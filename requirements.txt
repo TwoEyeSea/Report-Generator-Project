@@ -4,3 +4,5 @@ pytest
 pypdf
 flask
 pymupdf
+docxtpl
+Pillow
