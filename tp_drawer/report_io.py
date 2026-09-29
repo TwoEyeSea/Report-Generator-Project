@@ -257,9 +257,12 @@ def _formation_commentary(project: Project, primary_reason: str, formation_templ
 
 
 def _notes_context(project: Project) -> dict:
-    """Section 3.1 Notes: a bold heading followed by one or more dash-
-    bulleted lines (notes_lines), rendered by a {%p for %} loop in the
-    template so it isn't limited to exactly one line.
+    """Section 3.1 Notes: a bold heading followed by one or more lines
+    (notes_lines), rendered by a {%p for %} loop in the template so it
+    isn't limited to exactly one line. Each line's own paragraph already
+    carries a real Word bulleted-list numbering (numId 49, a literal "-"
+    glyph) -- notes_lines must NOT prepend its own "- " on top of that,
+    or the dash renders twice (confirmed directly: "-    - TP1: ...").
     - Nothing entered on the form at all -> a default note reassuring the
       reader the pits were excavated successfully, rather than a bare
       "None." that reads as if the field was simply skipped.
@@ -268,11 +271,11 @@ def _notes_context(project: Project) -> dict:
       bulleted line per pit that actually has one."""
     notes = [(pit.number, pit.extra_note.strip()) for pit in project.pits if pit.extra_note.strip()]
     if not notes:
-        return {"notes_heading": "All Tps:", "notes_lines": ["- Excavated successfully"]}
+        return {"notes_heading": "All Tps:", "notes_lines": ["Excavated successfully"]}
     distinct_texts = {text for _, text in notes}
     if len(distinct_texts) == 1 and len(notes) == len(project.pits):
-        return {"notes_heading": "All Tps:", "notes_lines": [f"- {next(iter(distinct_texts))}"]}
-    return {"notes_heading": "Notes:", "notes_lines": [f"- TP{number}: {text}" for number, text in notes]}
+        return {"notes_heading": "All Tps:", "notes_lines": [next(iter(distinct_texts))]}
+    return {"notes_heading": "Notes:", "notes_lines": [f"TP{number}: {text}" for number, text in notes]}
 
 
 @dataclass

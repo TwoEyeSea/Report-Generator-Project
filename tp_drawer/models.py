@@ -55,7 +55,14 @@ class Layer:
 class TrialPit:
     """One excavated trial pit: an ordered stack of Layers from the ground
     surface downward, plus a few pit-level facts (groundwater depth, why
-    digging stopped)."""
+    digging stopped, whether the pit walls stayed stable).
+
+    walls_stable defaults to True (not just for a brand new pit built in
+    code, but for one loaded from an older input sheet or project.json
+    that predates this field) so existing projects keep reading as
+    "STRUCTURAL INTEGRITY REMAINED SOUND" -- the same wording every pit
+    already had before this field existed -- unless the sheet explicitly
+    says otherwise."""
 
     number: str
     # ADVANCED TECHNIQUE -- field(default_factory=list):
@@ -70,6 +77,7 @@ class TrialPit:
     groundwater_depth_in: Decimal | None = None
     termination_reason: str = DEFAULT_TERMINATION_REASON
     extra_note: str = ""
+    walls_stable: bool = True
 
     @property
     def total_depth_in(self) -> Decimal:
@@ -168,6 +176,7 @@ def project_to_dict(project: Project) -> dict:
                 "groundwater_depth_in": str(pit.groundwater_depth_in) if pit.groundwater_depth_in is not None else None,
                 "termination_reason": pit.termination_reason,
                 "extra_note": pit.extra_note,
+                "walls_stable": pit.walls_stable,
             }
             for pit in project.pits
         ],
@@ -208,6 +217,10 @@ def project_from_dict(data: dict) -> Project:
                 groundwater_depth_in=Decimal(pit["groundwater_depth_in"]) if pit["groundwater_depth_in"] is not None else None,
                 termination_reason=pit["termination_reason"],
                 extra_note=pit["extra_note"],
+                # .get(..., True): project.json files saved before
+                # walls_stable existed just don't have this key -- default
+                # to True, the same as a brand new TrialPit.
+                walls_stable=pit.get("walls_stable", True),
             )
             for pit in data["pits"]
         ],

@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import openpyxl
 import pytest
 
 from tp_drawer.excel_io import read_project, write_template
@@ -98,6 +99,110 @@ def test_read_project_final_strata(workbook_path):
 
     assert project.pits[0].termination_reason == "IRONSHORE FORMATION MARL"
     assert project.pits[1].termination_reason == DEFAULT_TERMINATION_REASON
+
+
+def test_read_project_pit_notes(workbook_path):
+    make_workbook(
+        workbook_path,
+        DEFAULT_HEADER,
+        pit_numbers=[1, 2, 3],
+        layers=[("Topsoil\n(Layer thickness)", ["3'-5\"", "3'-10\"", "2'-0\""])],
+        groundwater=["7'-2\"", "4'-11\"", "5'-0\""],
+        notes={1: "Boulders present within the spoils.", 2: "Trial pit walls unstable"},
+    )
+
+    project = read_project(workbook_path)
+
+    assert project.pits[0].extra_note == "Boulders present within the spoils."
+    assert project.pits[1].extra_note == "Trial pit walls unstable"
+    assert project.pits[2].extra_note == ""  # no row for pit 3 -> untouched default
+
+
+def test_read_project_pit_notes_tolerates_tiral_typo(workbook_path):
+    # "Tiral Pit 1:" (transposed letters) recurs across this practice's
+    # own real input sheets -- must be read the same as "Trial Pit 1:".
+    path = workbook_path
+    make_workbook(
+        path,
+        DEFAULT_HEADER,
+        pit_numbers=[1],
+        layers=[("Topsoil\n(Layer thickness)", ["3'-5\""])],
+        groundwater=["7'-2\""],
+    )
+    wb = openpyxl.load_workbook(path)
+    ws = wb.active
+    next_row = ws.max_row + 2
+    ws.cell(row=next_row, column=1, value="Notes:")
+    ws.cell(row=next_row + 1, column=1, value="Tiral Pit 1:")
+    ws.cell(row=next_row + 1, column=2, value="Shallow PVC conduit encountered.")
+    wb.save(path)
+
+    project = read_project(path)
+
+    assert project.pits[0].extra_note == "Shallow PVC conduit encountered."
+
+
+def test_read_project_without_notes_section_defaults_blank(workbook_path):
+    make_workbook(
+        workbook_path,
+        DEFAULT_HEADER,
+        pit_numbers=[1],
+        layers=[("Topsoil\n(Layer thickness)", ["3'-5\""])],
+        groundwater=["7'-2\""],
+    )
+
+    project = read_project(workbook_path)
+
+    assert project.pits[0].extra_note == ""
+
+
+def test_read_project_walls_stable(workbook_path):
+    make_workbook(
+        workbook_path,
+        DEFAULT_HEADER,
+        pit_numbers=[1, 2, 3],
+        layers=[("Topsoil\n(Layer thickness)", ["3'-5\"", "3'-10\"", "2'-0\""])],
+        groundwater=["7'-2\"", "4'-11\"", "5'-0\""],
+        walls_stable=["Yes", "No", None],
+    )
+
+    project = read_project(workbook_path)
+
+    assert project.pits[0].walls_stable is True
+    assert project.pits[1].walls_stable is False
+    assert project.pits[2].walls_stable is True  # blank cell defaults to stable
+
+
+def test_read_project_walls_stable_case_insensitive(workbook_path):
+    make_workbook(
+        workbook_path,
+        DEFAULT_HEADER,
+        pit_numbers=[1, 2],
+        layers=[("Topsoil\n(Layer thickness)", ["3'-5\"", "3'-10\""])],
+        groundwater=["7'-2\"", "4'-11\""],
+        walls_stable=["no", "YES"],
+    )
+
+    project = read_project(workbook_path)
+
+    assert project.pits[0].walls_stable is False
+    assert project.pits[1].walls_stable is True
+
+
+def test_read_project_without_walls_stable_row_defaults_stable(workbook_path):
+    # No walls_stable= at all -- an older input sheet built before this
+    # field existed should still load fine.
+    make_workbook(
+        workbook_path,
+        DEFAULT_HEADER,
+        pit_numbers=[1],
+        layers=[("Topsoil\n(Layer thickness)", ["3'-5\""])],
+        groundwater=["7'-2\""],
+    )
+
+    project = read_project(workbook_path)
+
+    assert project.pits[0].walls_stable is True
 
 
 def test_write_template_round_trips(tmp_path):

@@ -198,12 +198,14 @@ def _read_pit_columns(ws, header_row: int) -> list[tuple[int, str]]:
     return columns
 
 
-def _find_table_rows(ws, header_row: int) -> tuple[list[int], int, int | None]:
+def _find_table_rows(ws, header_row: int) -> tuple[list[int], int, int | None, int | None]:
     """Below the "Trial pit" header row, every row is either a soil layer
-    (until we hit "Groundwater") or, a little further down, an optional
-    "Final Strata" row naming what was found at the base of the pit.
-    Returns (list of layer row numbers, the groundwater row number, the
-    final-strata row number or None if that row isn't present)."""
+    (until we hit "Groundwater") or, a little further down, one or more
+    optional rows: "Final Strata" (what was found at the base of the pit)
+    and "Pit walls stable?" (whether the excavation stayed structurally
+    sound). Returns (list of layer row numbers, the groundwater row
+    number, the final-strata row number or None, the walls-stable row
+    number or None)."""
     layer_rows: list[int] = []
     groundwater_row: int | None = None
     for row in range(header_row + 1, header_row + 61):
@@ -232,7 +234,18 @@ def _find_table_rows(ws, header_row: int) -> tuple[list[int], int, int | None]:
             final_strata_row = row
             break
 
-    return layer_rows, groundwater_row, final_strata_row
+    # "Pit walls stable?" is likewise optional -- searched over a wider
+    # window than Final Strata since it's a newer field with no fixed
+    # position relative to it (a sheet might list it before or after
+    # Final Strata/Final Depth).
+    walls_stable_row: int | None = None
+    for row in range(groundwater_row + 1, groundwater_row + 10):
+        label = ws.cell(row=row, column=1).value
+        if label is not None and "pit walls stable" in _norm(str(label)):
+            walls_stable_row = row
+            break
+
+    return layer_rows, groundwater_row, final_strata_row, walls_stable_row
 
 
 # Matches a label like "Option 1", "Option 2", ... "Option 12" (as on the
@@ -270,6 +283,53 @@ def _read_recommended_foundations(ws, start_row: int) -> list[str]:
     return [text for _, text in numbered_values]
 
 
+# Matches a label like "Trial Pit 1:" or "Trial Pit 12:" under the sheet's
+# "Notes:" section -- one row per pit, the pit number embedded in the
+# label itself rather than the row living in a per-pit column the way the
+# main soil-layer table does. t(?:ri|ir)al (not just "trial") tolerates
+# "Tiral Pit 1:" -- a typo that recurs consistently across this
+# practice's own input sheets (seen on more than one real project), so
+# it's treated as an expected spelling rather than a sheet error.
+_PIT_NOTE_LABEL_RE = re.compile(r"^t(?:ri|ir)al\s+pit\s+(\d+)$")
+
+
+def _read_pit_notes(ws, start_row: int) -> dict[str, str]:
+    """Best-effort scan of the rows below the per-pit table for "Trial Pit
+    N:"/"Tiral Pit N:" rows, returning {pit_number: note_text}. Same
+    "generous fixed window, no boundary row" approach as
+    _read_recommended_foundations above, for the same reason: a sheet
+    with no such rows at all (there's never been a note worth recording,
+    or the sheet predates this field) should just yield an empty dict
+    rather than an error."""
+    notes: dict[str, str] = {}
+    for row in range(start_row, start_row + 100):
+        label = ws.cell(row=row, column=1).value
+        if label is None or str(label).strip() == "":
+            continue
+        match = _PIT_NOTE_LABEL_RE.match(_norm(str(label)))
+        if match is None:
+            continue
+        value = ws.cell(row=row, column=2).value
+        if value is not None and str(value).strip() != "":
+            notes[match.group(1)] = str(value).strip()
+    return notes
+
+
+def _parse_walls_stable(value) -> bool:
+    """Reads the "Pit walls stable?" cell: "Yes" -> True, "No" -> False,
+    matched case-insensitively/trimmed the same way every other label/
+    token comparison in this file is (see _norm). A blank cell, or any
+    other text that isn't recognizably "yes"/"no", defaults to True
+    (stable) rather than raising -- the same "don't fail a sheet over an
+    optional field" treatment _parse_optional_depth gives groundwater."""
+    if value is None:
+        return True
+    text = _norm(str(value))
+    if text == "no":
+        return False
+    return True
+
+
 def _parse_optional_depth(value, coordinate: str) -> Decimal | None:
     """Like units.parse_feet_inches, but for a cell that's allowed to be
     blank or say "-"/"N/A" (meaning "groundwater wasn't encountered") --
@@ -303,14 +363,23 @@ def read_project(path: str | Path) -> Project:
     info = _build_project_info(header_fields)
     pit_columns = _read_pit_columns(ws, header_row)
     # ADVANCED TECHNIQUE -- multiple return values via a tuple:
-    # _find_table_rows returns three different pieces of information
-    # packed into one tuple; writing `a, b, c = some_function(...)`
-    # unpacks them into three separate names in one line, which reads
+    # _find_table_rows returns four different pieces of information
+    # packed into one tuple; writing `a, b, c, d = some_function(...)`
+    # unpacks them into four separate names in one line, which reads
     # more clearly than reaching into a tuple by numeric index
-    # (result[0], result[1], result[2]).
-    layer_rows, groundwater_row, final_strata_row = _find_table_rows(ws, header_row)
+    # (result[0], result[1], result[2], result[3]).
+    layer_rows, groundwater_row, final_strata_row, walls_stable_row = _find_table_rows(ws, header_row)
 
-    info.recommended_foundations = _read_recommended_foundations(ws, (final_strata_row or groundwater_row) + 1)
+    # Where the per-pit table ends and any optional sections below it
+    # (Recommended Foundation, Notes) begin -- the highest of the three
+    # optional/required row numbers just found, since a sheet can order
+    # Final Strata and Pit Walls Stable? either way (walls_stable_row's
+    # own search window already tolerates that -- see _find_table_rows --
+    # so this can't just assume final_strata_row is always the later one).
+    post_table_row = max(row for row in (groundwater_row, final_strata_row, walls_stable_row) if row is not None) + 1
+
+    info.recommended_foundations = _read_recommended_foundations(ws, post_table_row)
+    pit_notes = _read_pit_notes(ws, post_table_row)
 
     pits: list[TrialPit] = []
     # Outer loop: once per pit column (left to right across the sheet).
@@ -347,12 +416,18 @@ def read_project(path: str | Path) -> Project:
             if strata_value is not None and str(strata_value).strip() != "":
                 termination_reason = str(strata_value).strip().upper()
 
+        walls_stable = True
+        if walls_stable_row is not None:
+            walls_stable = _parse_walls_stable(ws.cell(row=walls_stable_row, column=col).value)
+
         pits.append(
             TrialPit(
                 number=pit_number,
                 layers=layers,
                 groundwater_depth_in=groundwater_depth_in,
                 termination_reason=termination_reason,
+                walls_stable=walls_stable,
+                extra_note=pit_notes.get(pit_number, ""),
             )
         )
 

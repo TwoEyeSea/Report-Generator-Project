@@ -12,6 +12,7 @@ def test_project_to_dict_and_back_round_trips():
                 layers=[Layer(name="Topsoil", thickness_in=Decimal("14"), description="Dark brown silt.")],
                 groundwater_depth_in=Decimal("86"),
                 extra_note="Note.",
+                walls_stable=False,
             ),
             TrialPit(number="2", layers=[], groundwater_depth_in=None),
         ],
