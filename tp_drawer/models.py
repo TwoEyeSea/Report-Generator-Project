@@ -78,6 +78,15 @@ class TrialPit:
     termination_reason: str = DEFAULT_TERMINATION_REASON
     extra_note: str = ""
     walls_stable: bool = True
+    # Lets the click-to-edit overlay (see webapp/app.py) override a
+    # project-level ProjectInfo field (e.g. "equipment") for *this pit's
+    # own page only*, without touching the shared value every other pit
+    # reads -- keyed by the same attribute name as the ProjectInfo field
+    # it shadows (see tp_drawer.drawing.resolve_field). A "global" edit
+    # from the same UI instead writes straight to ProjectInfo and clears
+    # any stray per-pit override here, so it can't silently keep masking
+    # the new shared value.
+    field_overrides: dict[str, str] = field(default_factory=dict)
 
     @property
     def total_depth_in(self) -> Decimal:
@@ -131,6 +140,14 @@ class ProjectInfo:
     site_work_completion_date: str = ""
     proposed_structures: str = ""
     recommended_foundations: list[str] = field(default_factory=list)
+    # Item 2 of the trial pit log's general notes box -- a plain
+    # constant everywhere else in the codebase, promoted to a real,
+    # editable field purely so the click-to-edit overlay (see
+    # webapp/app.py) has a real field to write to instead of a raw,
+    # disconnected text override for the one notes line with no other
+    # backing field at all (every other line maps to equipment/date/
+    # file_ref/groundwater/etc.).
+    ground_levels_note: str = "GROUND LEVELS ARE APPROXIMATE AND BASED UPON LOCAL KNOWLEDGE ONLY."
 
 
 @dataclass
@@ -177,6 +194,7 @@ def project_to_dict(project: Project) -> dict:
                 "termination_reason": pit.termination_reason,
                 "extra_note": pit.extra_note,
                 "walls_stable": pit.walls_stable,
+                "field_overrides": pit.field_overrides,
             }
             for pit in project.pits
         ],
@@ -221,6 +239,7 @@ def project_from_dict(data: dict) -> Project:
                 # walls_stable existed just don't have this key -- default
                 # to True, the same as a brand new TrialPit.
                 walls_stable=pit.get("walls_stable", True),
+                field_overrides=pit.get("field_overrides", {}),
             )
             for pit in data["pits"]
         ],

@@ -75,7 +75,7 @@
     "hatch_pattern": "gravel",
     "hatch_angle": 0.0,
     "hatch_size": 1.1,
-    "background_color": "#ffed94",
+    "background_color": "#ffcb5c",
     "line_color": "#000000",
     "is_native": false
   },
@@ -85,7 +85,7 @@
     "hatch_pattern": "gravel",
     "hatch_angle": 0.0,
     "hatch_size": 0.4,
-    "background_color": "#ffc547",
+    "background_color": "#f2cf82",
     "line_color": "#000000",
     "is_native": false
   },
@@ -118,5 +118,25 @@
     "background_color": "#d4ffd1",
     "line_color": "#000000",
     "is_native": true
+  },
+  {
+    "name": "Silt",
+    "description": "Loose, grey inorganic soil. Concentrated nodes of silt (\u22640.002\u201d). Uniformly-graded soil with the potential to become highly compressible with increasing moisture content. Soil not suitable for reuse within the ground filling profile and presents a high risk of differential settlement which can lead to significant structural damage.",
+    "hatch_pattern": "dots",
+    "hatch_angle": 0.0,
+    "hatch_size": 0.3,
+    "background_color": "#cfe7c6",
+    "line_color": "#000000",
+    "is_native": true
+  },
+  {
+    "name": "Boulder Fill",
+    "description": "Loose, greyish white, tan, light brown inorganic soil. Predominantly angular boulders (up to 3\u2019-0\u201d length) with secondary grains of cobbles (2.4\" to 8\" dia.). Poorly-graded fill, not suitable for reuse within the ground-filling profile.",
+    "hatch_pattern": "gravel",
+    "hatch_angle": 0.0,
+    "hatch_size": 2.0,
+    "background_color": "#eabc57",
+    "line_color": "#000000",
+    "is_native": false
   }
 ]

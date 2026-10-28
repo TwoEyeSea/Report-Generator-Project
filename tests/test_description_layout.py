@@ -5,10 +5,10 @@ from tp_drawer.description_layout import (
     _classify,
     _place_at_fontsize,
     _push_down,
-    _scaled_wrap_width,
     _wrap_unit,
     line_height_in,
     place_descriptions,
+    scaled_wrap_width,
 )
 
 MIN_GAP_RATIO = 0.6
@@ -483,9 +483,9 @@ def test_shrinking_has_no_fixed_floor_even_with_many_verbose_units():
 def test_scaled_wrap_width_grows_as_fontsize_shrinks():
     # Character width scales ~linearly with fontsize, so fitting the same
     # page-inch line width at half the fontsize takes ~double the characters.
-    assert _scaled_wrap_width(30, 6.5, 6.5) == 30  # no shrink -> unchanged
-    assert _scaled_wrap_width(30, 6.5, 3.25) == 60  # half the fontsize -> double the characters
-    assert _scaled_wrap_width(30, 6.5, 0.5) >= 1  # never collapses to zero/negative
+    assert scaled_wrap_width(30, 6.5, 6.5) == 30  # no shrink -> unchanged
+    assert scaled_wrap_width(30, 6.5, 3.25) == 60  # half the fontsize -> double the characters
+    assert scaled_wrap_width(30, 6.5, 0.5) >= 1  # never collapses to zero/negative
 
 
 def test_wrap_width_rescales_with_fontsize_to_keep_visual_width_stable():
@@ -504,7 +504,7 @@ def test_wrap_width_rescales_with_fontsize_to_keep_visual_width_stable():
 
     default_lines = _wrap_unit(unit, 30)
     half_fontsize = DEFAULT_FONTSIZE / 2
-    half_wrap_width = _scaled_wrap_width(30, DEFAULT_FONTSIZE, half_fontsize)
+    half_wrap_width = scaled_wrap_width(30, DEFAULT_FONTSIZE, half_fontsize)
     assert half_wrap_width == 60
     half_lines = _wrap_unit(unit, half_wrap_width)
 
@@ -515,13 +515,13 @@ def test_wrap_width_rescales_with_fontsize_to_keep_visual_width_stable():
 
     # Wired into the actual shrink loop, not just the standalone formula: a
     # modest shrink still rewraps (differently) rather than reusing the
-    # default-size lines, and matches what _scaled_wrap_width predicts.
+    # default-size lines, and matches what scaled_wrap_width predicts.
     units = [unit]
     roomy = place_descriptions(units, frame_top=10.0, frame_bottom=0.0, wrap_width=30, min_gap_ratio=MIN_GAP_RATIO, padding_ratio=PADDING_RATIO)
     cramped = place_descriptions(units, frame_top=10.0, frame_bottom=9.85, wrap_width=30, min_gap_ratio=MIN_GAP_RATIO, padding_ratio=PADDING_RATIO)
     assert cramped[0].fontsize < roomy[0].fontsize  # shrink actually engaged
     assert cramped[0].lines != roomy[0].lines
-    expected_width = _scaled_wrap_width(30, DEFAULT_FONTSIZE, cramped[0].fontsize)
+    expected_width = scaled_wrap_width(30, DEFAULT_FONTSIZE, cramped[0].fontsize)
     assert cramped[0].lines == _wrap_unit(unit, expected_width)
 
 

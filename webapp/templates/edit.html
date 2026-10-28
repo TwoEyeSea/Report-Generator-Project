@@ -10,7 +10,7 @@
     <div class="result-header">
       <div>
         <h1>Generated trial pit logs</h1>
-        <p class="subtitle">{{ pits|length }} trial pit(s). Edit a unit's description below and its preview updates automatically.</p>
+        <p class="subtitle">{{ pits|length }} trial pit(s). Edit a unit's description below, or click its text directly on the drawing, and the preview updates automatically.</p>
       </div>
       <form class="download-actions" action="{{ export_url }}" method="get">
         <select name="what" class="export-select">
@@ -24,7 +24,10 @@
       </form>
     </div>
 
-    <p><a class="link" href="{{ url_for('index') }}">&larr; Generate another</a></p>
+    <div class="toolbar-row">
+      <a class="link" href="{{ url_for('index') }}">&larr; Generate another</a>
+      <button type="button" id="toggle-descriptions-btn" class="toggle-button">Hide description text boxes</button>
+    </div>
 
     <div class="panel">
       <h2 class="panel-title">Appendix B photos</h2>
@@ -72,7 +75,11 @@
                 </div>
               {% endfor %}
             </div>
-            <img id="pit-image-{{ pit.pit_index }}" src="{{ pit.image_url }}" alt="Trial Pit No. {{ pit.number }} preview">
+            <div class="pit-image-wrap" data-pit-index="{{ pit.pit_index }}">
+              <img id="pit-image-{{ pit.pit_index }}" src="{{ pit.image_url }}" alt="Trial Pit No. {{ pit.number }} preview" data-boxes-url="{{ pit.boxes_url }}" data-fields-url="{{ pit.fields_url }}">
+              <div class="box-overlay" id="pit-overlay-{{ pit.pit_index }}"></div>
+              <div class="box-overlay" id="pit-field-overlay-{{ pit.pit_index }}"></div>
+            </div>
           </div>
         </div>
       {% endfor %}
@@ -82,6 +89,39 @@
   <script>
     const jobId = {{ job_id | tojson }};
     let debounceTimer = null;
+
+    // ---- Description sidebar toggle ---------------------------------------
+    // Every unit's description is already editable directly on the drawing
+    // (see the click-to-edit overlay below), so the sidebar list of
+    // textareas next to each pit's image is now redundant space for anyone
+    // who's used to that -- this lets them collapse it, remembering the
+    // choice in localStorage (wrapped in try/catch: it can throw in a
+    // private-browsing context with storage blocked, in which case the
+    // toggle still works for this page view, it just won't be remembered).
+    const DESCRIPTIONS_HIDDEN_KEY = "tpld-descriptions-hidden";
+    const toggleDescriptionsBtn = document.getElementById("toggle-descriptions-btn");
+
+    function setDescriptionsHidden(hidden) {
+      document.body.classList.toggle("descriptions-hidden", hidden);
+      toggleDescriptionsBtn.textContent = hidden ? "Show description text boxes" : "Hide description text boxes";
+      try {
+        localStorage.setItem(DESCRIPTIONS_HIDDEN_KEY, hidden ? "1" : "0");
+      } catch {
+        // see comment above -- not fatal, just not remembered
+      }
+    }
+
+    let descriptionsInitiallyHidden = false;
+    try {
+      descriptionsInitiallyHidden = localStorage.getItem(DESCRIPTIONS_HIDDEN_KEY) === "1";
+    } catch {
+      // see comment above
+    }
+    setDescriptionsHidden(descriptionsInitiallyHidden);
+
+    toggleDescriptionsBtn.addEventListener("click", () => {
+      setDescriptionsHidden(!document.body.classList.contains("descriptions-hidden"));
+    });
 
     document.querySelectorAll(".description-input").forEach((el) => {
       el.addEventListener("input", () => {
@@ -105,10 +145,335 @@
         return;
       }
       const data = await response.json();
+      applyPitUpdate(data);
+    }
+
+    // Shared by sendUpdate above and saveFieldEdit below: both endpoints
+    // hand back {pit_index, image_url, boxes_url[, fields_url]} for each
+    // pit that was actually re-rendered -- swap the preview image in and
+    // reload both box overlays (a field edit's box positions never move,
+    // but a long description edit's do -- see description_layout.py's
+    // reflow -- and it's simpler/safer to always refresh both than to
+    // track which endpoint can move which boxes).
+    function applyPitUpdate(data) {
       const img = document.getElementById(`pit-image-${data.pit_index}`);
       if (img) {
         img.src = data.image_url;
+        img.dataset.boxesUrl = data.boxes_url;
+        if (data.fields_url) {
+          img.dataset.fieldsUrl = data.fields_url;
+        }
       }
+      loadBoxesForPit(data.pit_index);
+      loadFieldBoxesForPit(data.pit_index);
+    }
+
+    // ---- Click-to-edit overlay -------------------------------------------
+    // Lets someone click a unit's description directly on the rendered
+    // drawing instead of hunting for it in the textarea list on the left.
+    // tp_drawer.drawing already works out exactly where every layer's
+    // description text landed on the page while rendering it (its reflow
+    // can move text around to avoid overlaps); the webapp turns that into
+    // a small JSON file of click regions per pit (see webapp/app.py's
+    // _save_description_boxes), as fractions of the page's own width/
+    // height so they line up with the preview image at whatever size the
+    // browser actually displays it.
+
+    function findTextarea(pitIndex, layerIndex) {
+      return document.querySelector(`.description-input[data-pit-index="${pitIndex}"][data-layer-index="${layerIndex}"]`);
+    }
+
+    async function loadBoxesForPit(pitIndex) {
+      const img = document.getElementById(`pit-image-${pitIndex}`);
+      const overlay = document.getElementById(`pit-overlay-${pitIndex}`);
+      if (!img || !overlay || !img.dataset.boxesUrl) {
+        return;
+      }
+      overlay.innerHTML = "";
+      let boxes;
+      try {
+        const response = await fetch(img.dataset.boxesUrl);
+        if (!response.ok) {
+          return; // an older job from before this feature has no boxes file yet
+        }
+        boxes = await response.json();
+      } catch {
+        return;
+      }
+      boxes.forEach((box) => {
+        if (!findTextarea(pitIndex, box.layer_index)) {
+          return; // stale box data referencing a layer that no longer exists
+        }
+        const region = document.createElement("div");
+        region.className = "click-region";
+        region.style.left = `${(box.x * 100).toFixed(3)}%`;
+        region.style.top = `${(box.y * 100).toFixed(3)}%`;
+        region.style.width = `${(box.width * 100).toFixed(3)}%`;
+        region.style.height = `${(box.height * 100).toFixed(3)}%`;
+        region.title = "Click to edit this description";
+        region.addEventListener("click", () => openEditPopover(pitIndex, box.layer_index));
+        overlay.appendChild(region);
+      });
+    }
+
+    document.querySelectorAll(".pit-image-wrap").forEach((wrap) => {
+      loadBoxesForPit(Number(wrap.dataset.pitIndex));
+      loadFieldBoxesForPit(Number(wrap.dataset.pitIndex));
+    });
+
+    // ---- Shared modal dialog ------------------------------------------
+    // Both click-to-edit popups (this one and the field-box one further
+    // down) open through this one helper: a fixed, full-viewport
+    // backdrop with a centered, resizable dialog box, rather than a
+    // small popover anchored to the clicked region -- a click region can
+    // sit anywhere on a trial pit drawing that's been scaled down to fit
+    // .page's 900px-wide column, so anchoring the dialog there could
+    // push part of it off-screen with no way to reach it. Centering in
+    // an overlay guarantees the whole dialog is always visible, and
+    // `resize: both` (see style.css's .modal) lets someone drag it
+    // bigger if a box's field list runs long.
+    let activePopover = null;
+
+    function closePopover() {
+      if (activePopover) {
+        activePopover.remove();
+        activePopover = null;
+      }
+    }
+
+    function openModal(title) {
+      closePopover();
+
+      const backdrop = document.createElement("div");
+      backdrop.className = "modal-backdrop";
+      // Only close on a click that lands on the backdrop itself, not one
+      // that bubbled up from something inside the dialog.
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) {
+          closePopover();
+        }
+      });
+
+      const modal = document.createElement("div");
+      modal.className = "modal";
+      backdrop.appendChild(modal);
+
+      const header = document.createElement("div");
+      header.className = "modal-header";
+      const heading = document.createElement("h3");
+      heading.textContent = title;
+      const closeButton = document.createElement("button");
+      closeButton.type = "button";
+      closeButton.className = "modal-close";
+      closeButton.innerHTML = "&times;";
+      closeButton.setAttribute("aria-label", "Close");
+      closeButton.addEventListener("click", closePopover);
+      header.appendChild(heading);
+      header.appendChild(closeButton);
+      modal.appendChild(header);
+
+      const body = document.createElement("div");
+      body.className = "modal-body";
+      modal.appendChild(body);
+
+      const actions = document.createElement("div");
+      actions.className = "modal-actions";
+      modal.appendChild(actions);
+
+      document.body.appendChild(backdrop);
+      activePopover = backdrop;
+      return { body, actions };
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && activePopover) {
+        closePopover();
+      }
+    });
+
+    function openEditPopover(pitIndex, layerIndex) {
+      const textarea = findTextarea(pitIndex, layerIndex);
+      if (!textarea) {
+        return;
+      }
+      const layerName = textarea.closest(".field")?.querySelector("label")?.textContent || "Unit Description";
+      const { body, actions } = openModal(`Edit: ${layerName}`);
+
+      const input = document.createElement("textarea");
+      input.value = textarea.value;
+      input.rows = 8;
+      body.appendChild(input);
+
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.textContent = "Cancel";
+      cancelButton.addEventListener("click", closePopover);
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.textContent = "Save Edit";
+      saveButton.addEventListener("click", async () => {
+        textarea.value = input.value;
+        await sendUpdate(textarea);
+        closePopover();
+      });
+      actions.appendChild(cancelButton);
+      actions.appendChild(saveButton);
+
+      input.focus();
+    }
+
+    // ---- Click-to-edit overlay: everything else (NOTES/PROJECT/TITLE/
+    // DRAWN BY/SCALE/FILE) ---------------------------------------------
+    // Same idea as the description overlay above, but each box can carry
+    // several backing fields at once (e.g. the NOTES box's equipment
+    // line is really two fields, equipment + equipment provider), and
+    // each field can be edited either just for the clicked pit or for
+    // every pit at once -- see webapp/app.py's FIELD_BOX_SPECS and
+    // update_fields route. The server sends each field's current value
+    // and input kind ("text" | "yesno" | "depth") straight in the boxes
+    // JSON, so no separate lookup is needed to build the popup's inputs.
+
+    async function loadFieldBoxesForPit(pitIndex) {
+      const img = document.getElementById(`pit-image-${pitIndex}`);
+      const overlay = document.getElementById(`pit-field-overlay-${pitIndex}`);
+      if (!img || !overlay || !img.dataset.fieldsUrl) {
+        return;
+      }
+      overlay.innerHTML = "";
+      let boxes;
+      try {
+        const response = await fetch(img.dataset.fieldsUrl);
+        if (!response.ok) {
+          return; // an older job from before this feature has no fields file yet
+        }
+        boxes = await response.json();
+      } catch {
+        return;
+      }
+      boxes.forEach((box) => {
+        const region = document.createElement("div");
+        region.className = "click-region";
+        region.style.left = `${(box.x * 100).toFixed(3)}%`;
+        region.style.top = `${(box.y * 100).toFixed(3)}%`;
+        region.style.width = `${(box.width * 100).toFixed(3)}%`;
+        region.style.height = `${(box.height * 100).toFixed(3)}%`;
+        region.title = "Click to edit this box's text";
+        region.addEventListener("click", () => openFieldEditPopover(pitIndex, box));
+        overlay.appendChild(region);
+      });
+    }
+
+    // Friendlier modal titles than the raw box_id (see FIELD_BOX_SPECS in
+    // webapp/app.py, which is where these box_ids come from).
+    const FIELD_BOX_TITLES = {
+      general_notes: "Edit: NOTES",
+      title_notes: "Edit: NOTES (title block)",
+      project: "Edit: PROJECT",
+      title: "Edit: TITLE",
+      drawn_by: "Edit: DRAWN BY",
+      scale: "Edit: SCALE",
+      file: "Edit: FILE",
+    };
+
+    function fieldInputElement(field) {
+      if (field.kind === "yesno") {
+        const select = document.createElement("select");
+        ["yes", "no"].forEach((v) => {
+          const option = document.createElement("option");
+          option.value = v;
+          option.textContent = v === "yes" ? "Yes" : "No";
+          if (field.value.trim().toLowerCase() === v) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        });
+        return select;
+      }
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = field.value;
+      if (field.kind === "depth") {
+        input.placeholder = "e.g. 7'-2\" (blank = not encountered)";
+      }
+      return input;
+    }
+
+    function openFieldEditPopover(pitIndex, box) {
+      const { body, actions } = openModal(FIELD_BOX_TITLES[box.box_id] || "Edit");
+
+      const inputs = box.fields.map((field) => {
+        const row = document.createElement("div");
+        row.className = "field-row";
+        const label = document.createElement("label");
+        label.textContent = field.label;
+        row.appendChild(label);
+        const input = fieldInputElement(field);
+        row.appendChild(input);
+        body.appendChild(row);
+        return { key: field.key, input, originalValue: field.value };
+      });
+
+      const scopeRow = document.createElement("div");
+      scopeRow.className = "radio-row";
+      [
+        { value: "pit", text: "This pit only", checked: true },
+        { value: "global", text: "All pits" },
+      ].forEach(({ value, text, checked }) => {
+        const optLabel = document.createElement("label");
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = `scope-${pitIndex}-${box.box_id}`;
+        radio.value = value;
+        radio.checked = !!checked;
+        optLabel.appendChild(radio);
+        optLabel.append(` ${text}`);
+        scopeRow.appendChild(optLabel);
+      });
+      body.appendChild(scopeRow);
+
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.textContent = "Cancel";
+      cancelButton.addEventListener("click", closePopover);
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.textContent = "Save Edit";
+      saveButton.addEventListener("click", () => saveFieldEdit(pitIndex, scopeRow, inputs));
+      actions.appendChild(cancelButton);
+      actions.appendChild(saveButton);
+    }
+
+    async function saveFieldEdit(pitIndex, scopeRow, inputs) {
+      const scope = scopeRow.querySelector("input[type=radio]:checked").value;
+      // Only send fields the user actually changed -- a multi-field box
+      // (e.g. the general NOTES box's 8 fields) would otherwise resend
+      // every field's untouched value on every save. For a "this pit
+      // only" edit that's not harmless: it would freeze a per-pit
+      // override for every untouched field too, permanently shadowing
+      // that pit from any *later* global edit to those fields (see
+      // FIELD_BOX_SPECS/resolve_field) even though the user never meant
+      // to touch them.
+      const values = {};
+      inputs.forEach(({ key, input, originalValue }) => {
+        if (input.value !== originalValue) {
+          values[key] = input.value;
+        }
+      });
+      if (Object.keys(values).length === 0) {
+        closePopover(); // nothing was actually changed
+        return;
+      }
+      const response = await fetch(`/edit/${jobId}/update_fields`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pit_index: pitIndex, scope, values }),
+      });
+      if (!response.ok) {
+        return;
+      }
+      const data = await response.json();
+      data.pits.forEach(applyPitUpdate);
+      closePopover();
     }
   </script>
 </body>

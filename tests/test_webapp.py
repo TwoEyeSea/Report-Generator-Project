@@ -128,9 +128,167 @@ def test_edit_update_changes_description_and_returns_new_previews(client, tmp_pa
     body = response.get_json()
     assert body["pit_index"] == 0
     assert "image_url" in body
+    assert "boxes_url" in body
 
     project_data = json.loads((OUTPUTS_DIR / job_id / "project.json").read_text())
     assert project_data["pits"][0]["layers"][0]["description"] == "A freshly edited description."
+
+
+def test_edit_page_serves_a_click_to_edit_box_per_layer(client, tmp_path):
+    # _valid_workbook_bytes gives pit 1 two layers (Topsoil, Peat) -- see
+    # the click-to-edit overlay's coordinate map for each.
+    job_id = _generate(client, tmp_path)
+
+    edit_page = client.get(f"/edit/{job_id}")
+    assert b"pit_0_boxes.json" in edit_page.data
+
+    response = client.get(f"/outputs/{job_id}/pit_0_boxes.json")
+    assert response.status_code == 200
+    assert response.content_type == "application/json"
+    boxes = response.get_json()
+    assert [box["layer_index"] for box in boxes] == [0, 1]
+    for box in boxes:
+        # Fractions of the page's own width/height (0-1), not pixels --
+        # see webapp.app._save_description_boxes.
+        assert 0 <= box["x"] <= 1
+        assert 0 <= box["y"] <= 1
+        assert 0 < box["width"] <= 1
+        assert 0 < box["height"] <= 1
+
+
+def test_edit_update_refreshes_box_coordinates_for_every_layer(client, tmp_path):
+    # A long enough description can push a *later* layer's description
+    # block down the page too (description_layout.py's reflow) -- editing
+    # one layer must re-save every layer's box on that pit, not just the
+    # edited one.
+    job_id = _generate(client, tmp_path)
+    before = client.get(f"/outputs/{job_id}/pit_0_boxes.json").get_json()
+
+    response = client.post(
+        f"/edit/{job_id}/update",
+        json={"pit_index": 0, "layer_index": 0, "description": "A much, much longer description. " * 12},
+    )
+    assert response.status_code == 200
+
+    after = client.get(f"/outputs/{job_id}/pit_0_boxes.json").get_json()
+    assert [box["layer_index"] for box in after] == [box["layer_index"] for box in before]
+    assert after != before  # at least the edited layer's own box grew taller
+
+
+def test_edit_page_serves_a_field_box_per_labelled_box(client, tmp_path):
+    job_id = _generate(client, tmp_path)
+
+    edit_page = client.get(f"/edit/{job_id}")
+    assert b"pit_0_fields.json" in edit_page.data
+
+    response = client.get(f"/outputs/{job_id}/pit_0_fields.json")
+    assert response.status_code == 200
+    boxes = response.get_json()
+    assert {box["box_id"] for box in boxes} == {"general_notes", "title_notes", "project", "title", "drawn_by", "scale", "file"}
+    for box in boxes:
+        assert 0 <= box["x"] <= 1
+        assert 0 <= box["y"] <= 1
+        assert 0 < box["width"] <= 1
+        assert 0 < box["height"] <= 1
+        assert box["fields"]  # every box has at least one editable field
+        for field in box["fields"]:
+            assert set(field) == {"key", "label", "kind", "value"}
+
+
+def test_update_fields_pit_scope_only_changes_that_pit(client, tmp_path):
+    job_id = _generate(client, tmp_path)
+
+    response = client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "pit", "values": {"project:drawn_by": "ABC"}},
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert [p["pit_index"] for p in body["pits"]] == [0]
+
+    project_data = json.loads((OUTPUTS_DIR / job_id / "project.json").read_text())
+    assert project_data["pits"][0]["field_overrides"]["drawn_by"] == "ABC"
+    assert project_data["info"]["drawn_by"] != "ABC"
+
+    fields_0 = client.get(f"/outputs/{job_id}/pit_0_fields.json").get_json()
+    fields_1 = client.get(f"/outputs/{job_id}/pit_1_fields.json").get_json()
+    drawn_by_0 = next(f["value"] for box in fields_0 if box["box_id"] == "drawn_by" for f in box["fields"])
+    drawn_by_1 = next(f["value"] for box in fields_1 if box["box_id"] == "drawn_by" for f in box["fields"])
+    assert drawn_by_0 == "ABC"
+    assert drawn_by_1 != "ABC"
+
+
+def test_update_fields_global_scope_changes_every_pit_and_clears_overrides(client, tmp_path):
+    job_id = _generate(client, tmp_path)
+
+    client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "pit", "values": {"project:drawn_by": "ABC"}},
+    )
+    response = client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "global", "values": {"project:drawn_by": "XYZ"}},
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert {p["pit_index"] for p in body["pits"]} == {0, 1}
+
+    project_data = json.loads((OUTPUTS_DIR / job_id / "project.json").read_text())
+    assert project_data["info"]["drawn_by"] == "XYZ"
+    assert "drawn_by" not in project_data["pits"][0]["field_overrides"]
+
+
+def test_update_fields_pit_only_field_global_scope_applies_to_every_pit(client, tmp_path):
+    job_id = _generate(client, tmp_path)
+
+    response = client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "global", "values": {"pit:walls_stable": "no"}},
+    )
+    assert response.status_code == 200
+
+    project_data = json.loads((OUTPUTS_DIR / job_id / "project.json").read_text())
+    assert project_data["pits"][0]["walls_stable"] is False
+    assert project_data["pits"][1]["walls_stable"] is False
+
+
+def test_update_fields_depth_field_round_trips_and_blank_clears_it(client, tmp_path):
+    job_id = _generate(client, tmp_path)
+
+    response = client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "pit", "values": {"pit:groundwater_depth_in": "5'-0\""}},
+    )
+    assert response.status_code == 200
+    project_data = json.loads((OUTPUTS_DIR / job_id / "project.json").read_text())
+    assert project_data["pits"][0]["groundwater_depth_in"] == "60"
+
+    client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "pit", "values": {"pit:groundwater_depth_in": ""}},
+    )
+    project_data = json.loads((OUTPUTS_DIR / job_id / "project.json").read_text())
+    assert project_data["pits"][0]["groundwater_depth_in"] is None
+
+
+def test_update_fields_rejects_unknown_field_key(client, tmp_path):
+    job_id = _generate(client, tmp_path)
+
+    response = client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "pit", "values": {"project:not_a_real_field": "x"}},
+    )
+    assert response.status_code == 400
+
+
+def test_update_fields_rejects_bad_scope(client, tmp_path):
+    job_id = _generate(client, tmp_path)
+
+    response = client.post(
+        f"/edit/{job_id}/update_fields",
+        json={"pit_index": 0, "scope": "everywhere", "values": {"project:drawn_by": "ABC"}},
+    )
+    assert response.status_code == 400
 
 
 def test_edit_update_never_touches_the_catalog_store(client, tmp_path, isolated_catalog):

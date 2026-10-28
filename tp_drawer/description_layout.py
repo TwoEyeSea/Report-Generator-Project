@@ -97,7 +97,7 @@ thickness) is resolved in priority order:
      this is a full reset, not a patch. Because gaps shrink with the font
      too, there's no fixed floor: some small enough font always fits. The
      character-count wrap width is rescaled at every fontsize tried (see
-     _scaled_wrap_width) so a line always spans roughly the same page-inch
+     scaled_wrap_width) so a line always spans roughly the same page-inch
      width regardless of fontsize -- a smaller font fits proportionally
      more characters per line, so wrapped lines do change as the font
      shrinks (never identical to the default-size wrapping), but the
@@ -214,13 +214,18 @@ def _wrap_unit(unit: DescriptionUnit, wrap_width: int) -> list[str]:
     return header + body
 
 
-def _scaled_wrap_width(wrap_width: int, fontsize_default: float, fontsize: float) -> int:
+def scaled_wrap_width(wrap_width: int, fontsize_default: float, fontsize: float) -> int:
     """Character-count wrap width for a given fontsize, calibrated against
     `wrap_width` at fontsize_default so a wrapped line spans roughly the
     same page-inch width at any fontsize the shrink loop tries -- glyph
     width scales ~linearly with fontsize, so a smaller font needs
     proportionally more characters per line to fill the same physical
-    width."""
+    width.
+
+    Public (not `_`-prefixed) because drawing.py's own notes-box
+    shrink-to-fit (see _fit_box_text) reuses this exact same rescaling
+    rather than duplicating it -- same math, same reasoning, just applied
+    to a single text block instead of a reflowing stack of them."""
     # max(1, ...) is a safety floor: at an extremely small fontsize the
     # formula below could round down to 0 or a negative number, and
     # textwrap.wrap would either error or behave oddly with a
@@ -505,7 +510,7 @@ def place_descriptions(
     small enough font always fits within any positive frame_bottom.
 
     `wrap_width` is the character-count wrap width at fontsize_default; at
-    every smaller fontsize tried, it's rescaled via _scaled_wrap_width so a
+    every smaller fontsize tried, it's rescaled via scaled_wrap_width so a
     line keeps roughly the same page-inch width instead of shrinking along
     with the font -- see the module docstring's point 3."""
     if not units:
@@ -522,6 +527,6 @@ def place_descriptions(
     # near that floor.
     while min(p.landing_y for p in placed) < frame_bottom and fontsize > FONTSIZE_FLOOR:
         fontsize *= SHRINK_FACTOR
-        scaled_wrap_width = _scaled_wrap_width(wrap_width, fontsize_default, fontsize)
-        placed = _place_at_fontsize(units, scaled_wrap_width, frame_top, frame_bottom, min_gap_ratio, padding_ratio, fontsize)
+        this_wrap_width = scaled_wrap_width(wrap_width, fontsize_default, fontsize)
+        placed = _place_at_fontsize(units, this_wrap_width, frame_top, frame_bottom, min_gap_ratio, padding_ratio, fontsize)
     return placed

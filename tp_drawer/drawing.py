@@ -25,6 +25,7 @@ read it in file order.
 
 import math
 import textwrap
+from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -55,7 +56,7 @@ from PIL import Image, ImageCms
 
 from tp_drawer.catalog import UnitTemplate, find_template, load_catalog
 from tp_drawer.config import Config
-from tp_drawer.description_layout import DescriptionUnit, line_height_in, place_descriptions
+from tp_drawer.description_layout import DescriptionUnit, line_height_in, place_descriptions, scaled_wrap_width
 from tp_drawer.hatch_patterns import PATTERN_REGISTRY, Blob, Dot, LineSegment
 from tp_drawer.layout import band_y_range, compute_scale_preferring_fixed, y_at_depth
 from tp_drawer.models import DEFAULT_TERMINATION_REASON, Project, ProjectInfo, TrialPit
@@ -225,13 +226,51 @@ TITLE_BLOCK_BORDER_LINEWIDTH = 2.0  # vs. draw_box()'s fixed 0.8 for every box i
 # linespacing is matplotlib's own Text.linespacing: a multiplier of
 # fontsize applied between line baselines within a box's body text (only
 # visibly matters for boxes whose body text wraps to more than one line,
-# e.g. NOTES/PROJECT, but every box gets one for consistency and so a
-# short field can still be grown into a wrapped one later without having
-# to remember to add a linespacing setting for it then).
+# e.g. PROJECT, but every box gets one for consistency and so a short
+# field can still be grown into a wrapped one later without having to
+# remember to add a linespacing setting for it then).
+#
+# label_pad/line_gap: shared by draw_box() (the label's own position) and
+# _fit_box_text/_draw_notes_body below (how much of a box's own height is
+# already spoken for by its label before any body text starts) -- kept as
+# one pair of named constants rather than two separate hardcoded 0.11/0.15
+# literals so the two can never quietly drift out of sync with each other.
+BOX_LABEL_PAD = 0.11
+BOX_LABEL_LINE_GAP = 0.15
+
+# The two NOTES boxes (general_notes, title_notes) are NOT drawn via
+# draw_box()'s own single ax.text(..., linespacing=...) body_text path --
+# see _draw_notes_body below. Their text is instead drawn one line at a
+# time, stacked by _notes_line_height_in, specifically so the exact
+# height that will be drawn can be computed in plain Python *before*
+# anything is drawn (see _fit_box_text) -- the same "know the real height
+# up front, don't guess" discipline description_layout.py already uses
+# for the per-layer description blocks (see its own line_height_in) --
+# which is what lets a NOTES box whose boilerplate-plus-extra_note text
+# would otherwise overflow its fixed-height container automatically
+# shrink its fontsize until it fits, rather than spilling past the box's
+# border. NOTES_LINE_HEIGHT_FACTOR plays the same role for these two
+# boxes that description_layout.LINE_HEIGHT_FACTOR plays for descriptions
+# -- a separate constant because these boxes' body text used to be drawn
+# via matplotlib's own linespacing=1.8 (a single ax.text() call with
+# embedded newlines, not manual per-line stacking); empirically measuring
+# that exact rendering (fig.canvas.draw() + get_window_extent(), checked
+# at several fontsize/linespacing combinations) showed its real per-line
+# height is *exactly* `linespacing * fontsize/72` -- no extra fudge
+# factor -- so this constant is just that old linespacing value, which
+# reproduces the original look exactly rather than approximately.
+NOTES_LINE_HEIGHT_FACTOR = 1.8
+# Mirrors description_layout.SHRINK_FACTOR/FONTSIZE_FLOOR exactly (see
+# that module's docstring for the full reasoning): shrink 5% at a time
+# and re-wrap from scratch at each size tried, with no real design floor
+# -- because every line's height scales directly with fontsize, some
+# small enough fontsize always fits, so NOTES text is guaranteed to never
+# overflow its box rather than merely "usually" fitting.
+NOTES_SHRINK_FACTOR = 0.95
+NOTES_FONTSIZE_FLOOR = 0.01
+
 GENERAL_NOTES_FONTSIZE = 6.8
-GENERAL_NOTES_LINESPACING = 1.8
 TITLE_BLOCK_NOTES_FONTSIZE = 6.8
-TITLE_BLOCK_NOTES_LINESPACING = 1.8
 TITLE_BLOCK_PROJECT_FONTSIZE = 6.8
 TITLE_BLOCK_PROJECT_LINESPACING = 1.2
 TITLE_BLOCK_TITLE_FONTSIZE = 6.8
@@ -245,7 +284,7 @@ TITLE_BLOCK_FILE_LINESPACING = 0.8
 
 GENERAL_NOTES_BOILERPLATE = (
     "1) {equipment_note}\n"
-    "2) GROUND LEVELS ARE APPROXIMATE AND BASED UPON LOCAL KNOWLEDGE ONLY.\n"
+    "2) {ground_levels_note}\n"
     "3) TRIAL PIT EXCAVATION CARRIED OUT ON {date}.\n"
     "4) THIS TRIAL PIT LOG TO BE READ IN CONJUNCTION WITH SITE INSPECTION REPORT NO. 1, {file_ref}\n"
     "5) {groundwater_note}\n"
@@ -288,6 +327,42 @@ def _new_axes(cfg: Config):
     return fig, ax
 
 
+@dataclass
+class FieldBox:
+    """Page-inch bounding box (same y-up-from-bottom convention as
+    DescriptionBox above) around one whole labelled box drawn by
+    draw_box() -- NOTES, PROJECT, TITLE, DRAWN BY, SCALE, or FILE. Unlike
+    DescriptionBox (one box per soil layer), this is one box per *field
+    group*: the webapp's click-to-edit overlay looks up `box_id` in its
+    own FIELD_BOX_SPECS registry (see webapp/app.py) to know which
+    underlying Project/TrialPit attribute(s) a click on this box should
+    edit, and what kind of input each one needs -- this dataclass only
+    carries geometry, not that UI-facing metadata, matching how
+    DescriptionBox stays geometry-only too."""
+
+    box_id: str
+    x: float
+    y: float  # top of the box
+    width: float
+    height: float
+
+
+def _draw_tracked_box(
+    boxes: list[FieldBox], box_id: str,
+    ax, x: float, y: float, w: float, h: float, label: str, body_text: str = "",
+    fontsize: float = 6.5, linespacing: float = 1.2,
+) -> None:
+    """Thin wrapper around draw_box that also records the box's own
+    rectangle as a FieldBox, tagged with `box_id` -- since draw_box always
+    draws a plain rectangle at exactly (x, y, w, h), the click-to-edit
+    region is just that same rectangle, with no separate measurement pass
+    needed (unlike the per-layer description blocks, whose position
+    depends on description_layout.py's reflow and has to be read back
+    from what was actually placed)."""
+    draw_box(ax, x, y, w, h, label, body_text, fontsize=fontsize, linespacing=linespacing)
+    boxes.append(FieldBox(box_id=box_id, x=x, y=y + h, width=w, height=h))
+
+
 def draw_box(
     ax, x: float, y: float, w: float, h: float, label: str, body_text: str = "",
     fontsize: float = 6.5, linespacing: float = 1.2,
@@ -305,15 +380,71 @@ def draw_box(
     top of this file), so each box's text density can be tuned in
     isolation. The defaults here only apply if a caller genuinely doesn't
     care."""
-    label_pad = 0.11
-    line_gap = 0.15
     ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor="black", linewidth=0.8))
-    ax.text(x + 0.05, y + h - label_pad, label, fontsize=fontsize, fontweight="bold", va="top", ha="left")
+    ax.text(x + 0.05, y + h - BOX_LABEL_PAD, label, fontsize=fontsize, fontweight="bold", va="top", ha="left")
     if body_text:
-        ax.text(x + 0.05, y + h - label_pad - line_gap, body_text, fontsize=fontsize, linespacing=linespacing, va="top", ha="left")
+        ax.text(x + 0.05, y + h - BOX_LABEL_PAD - BOX_LABEL_LINE_GAP, body_text, fontsize=fontsize, linespacing=linespacing, va="top", ha="left")
 
 
-def _equipment_note(info: ProjectInfo, *, template: str) -> str:
+def _notes_line_height_in(fontsize: float) -> float:
+    """Single-spaced line height in page inches for the two NOTES boxes'
+    manually-stacked text -- see NOTES_LINE_HEIGHT_FACTOR's own comment
+    for why this is a separate constant/function from
+    description_layout.line_height_in rather than a shared one."""
+    return fontsize * NOTES_LINE_HEIGHT_FACTOR / 72.0
+
+
+def _fit_box_text(text: str, *, wrap_width: int, fontsize_default: float, available_height: float) -> tuple[list[str], float]:
+    """Wraps `text` and, if it's too tall for `available_height` at
+    fontsize_default, shrinks the fontsize (re-wrapping from scratch each
+    time via scaled_wrap_width, same as description_layout.place_descriptions'
+    own font-shrink step -- see that module's docstring) until it fits.
+    Returns the final wrapped lines and the fontsize they were wrapped at.
+
+    This is what guarantees a NOTES box's boilerplate-plus-extra_note
+    text can never overflow its fixed-height container: because every
+    line's rendered height scales directly with fontsize (see
+    _notes_line_height_in), some small enough fontsize always fits -- the
+    loop below is only bounded by NOTES_FONTSIZE_FLOOR as a safety net
+    against runaway iteration, not as a real design limit."""
+    fontsize = fontsize_default
+    lines = _wrap_lines(text, width=wrap_width).splitlines()
+    while len(lines) * _notes_line_height_in(fontsize) > available_height and fontsize > NOTES_FONTSIZE_FLOOR:
+        fontsize *= NOTES_SHRINK_FACTOR
+        this_wrap_width = scaled_wrap_width(wrap_width, fontsize_default, fontsize)
+        lines = _wrap_lines(text, width=this_wrap_width).splitlines()
+    return lines, fontsize
+
+
+def _draw_notes_body(ax, x: float, top_y: float, lines: list[str], fontsize: float) -> None:
+    """Draws _fit_box_text's already-wrapped, already-fitted lines as
+    individual stacked ax.text() calls (one per line, mirroring
+    _draw_description_block's identical technique) rather than a single
+    multi-line call relying on matplotlib's own text layout -- this is
+    what lets _fit_box_text compute the EXACT height that will be drawn
+    ahead of time, instead of approximating it."""
+    y = top_y
+    for line in lines:
+        ax.text(x, y, line, fontsize=fontsize, va="top", ha="left")
+        y -= _notes_line_height_in(fontsize)
+
+
+def resolve_field(project: Project, pit: TrialPit | None, attr: str) -> str:
+    """The current effective value of a ProjectInfo field that the
+    click-to-edit overlay (see webapp/app.py) lets someone edit either
+    globally or for one pit only: checks `pit.field_overrides` first (a
+    per-pit override set by a "this pit only" edit) before falling back
+    to the shared value every other pit reads directly off
+    `project.info`. A "global" edit instead writes straight to
+    project.info and clears every pit's override for that attribute (see
+    webapp/app.py's update_fields route), so it can't keep silently
+    masking the new shared value."""
+    if pit is not None and attr in pit.field_overrides:
+        return pit.field_overrides[attr]
+    return getattr(project.info, attr)
+
+
+def _equipment_note(equipment: str, equipment_provider: str, *, template: str) -> str:
     """Full text for a general/title-block notes box's equipment line --
     returns the *whole* sentence rather than filling blanks into a fixed
     template, so a project with no recorded equipment reads as a
@@ -326,14 +457,19 @@ def _equipment_note(info: ProjectInfo, *, template: str) -> str:
     `template` lets the general notes box (mentions the provider) and
     title block notes box (doesn't) keep their own existing wording for
     the case where equipment info is present, with one {equipment}/
-    {equipment_provider}-style placeholder each."""
-    if not info.equipment.strip() or not info.equipment_provider.strip():
+    {equipment_provider}-style placeholder each.
+
+    Takes the already-resolved strings rather than a ProjectInfo directly
+    so a caller can pass either the shared project.info value or a
+    per-pit field_overrides value (see resolve_field) without this
+    function needing to know which."""
+    if not equipment.strip() or not equipment_provider.strip():
         return "GROUND CONDITIONS VISUALLY CONFIRMED BY THE GEOTECHNICAL ENGINEER."
     # .rstrip(".") on the provider: it's re-appended once by the template
     # itself (every template here ends "...{equipment_provider}."), and a
     # provider name that already ends in a period (e.g. "...Ltd.") would
     # otherwise print a double one.
-    return template.format(equipment=info.equipment.upper(), equipment_provider=info.equipment_provider.rstrip(".").upper())
+    return template.format(equipment=equipment.upper(), equipment_provider=equipment_provider.rstrip(".").upper())
 
 
 def _groundwater_short(pit: TrialPit) -> str:
@@ -421,7 +557,12 @@ def _termination_caption(pit: TrialPit) -> str:
     never a rendering-ready string."""
     if pit.termination_reason == DEFAULT_TERMINATION_REASON:
         return DEFAULT_TERMINATION_REASON
-    return f"{pit.termination_reason} \nENCOUNTERED AT DEPTH"
+    # .upper() only the formatted sentence, not the equality check above:
+    # excel_io.py already upper-cases termination_reason when it's read
+    # off the input spreadsheet, but a web-UI edit (see webapp/app.py's
+    # click-to-edit popup) only .strip()s on save, so this is still
+    # needed for a formation name that reached here in mixed case.
+    return f"{pit.termination_reason.upper()} \nENCOUNTERED AT DEPTH"
 
 
 def _draw_groundwater_symbol(ax, gw_y: float, pit: TrialPit, scale: float) -> None:
@@ -702,7 +843,27 @@ def render_hatch_swatch(
     return buf.getvalue()
 
 
-def _draw_stratigraphy_column(ax, pit: TrialPit, scale: float, templates: list[UnitTemplate]) -> None:
+@dataclass
+class DescriptionBox:
+    """Page-inch bounding box (matplotlib's y-up-from-bottom convention,
+    same as every other coordinate in this file) around one layer's
+    description block, as actually drawn. Lets a caller -- the webapp's
+    click-to-edit overlay -- turn "the user clicked here on the rendered
+    preview" into "this is layer index N" without reimplementing
+    description_layout.py's own reflow logic just to ask where a given
+    layer's text ended up. A generous approximation (the full width of
+    the description text zone, `lines`-count-based height), not a tight
+    glyph-accurate outline -- it only needs to be clickable, not
+    pixel-perfect."""
+
+    layer_index: int
+    x: float
+    y: float  # top of the box
+    width: float
+    height: float
+
+
+def _draw_stratigraphy_column(ax, pit: TrialPit, scale: float, templates: list[UnitTemplate]) -> list[DescriptionBox]:
     """Draws the main event of the whole page: the true-to-scale soil
     column down the left side, plus everything that hangs off it -- the
     per-layer dimension lines, depth labels, unit descriptions, the
@@ -729,7 +890,7 @@ def _draw_stratigraphy_column(ax, pit: TrialPit, scale: float, templates: list[U
         # line and column edges) rather than crashing on the division
         # that would follow from a zero total depth.
         ax.add_patch(Rectangle((COLUMN_X, FRAME_TOP_Y), COLUMN_W, 0, fill=False, edgecolor="black"))
-        return
+        return []
 
     col_bottom_y = y_at_depth(FRAME_TOP_Y, scale, total_depth)
 
@@ -789,9 +950,13 @@ def _draw_stratigraphy_column(ax, pit: TrialPit, scale: float, templates: list[U
     # both known, actually draw everything, one layer at a time, top to
     # bottom. zip() here lines up three separate lists (layers, their
     # y-bounds, and their solved description placements) so each loop
-    # iteration has everything it needs for one complete layer.
+    # iteration has everything it needs for one complete layer; wrapping
+    # that in enumerate() additionally numbers each iteration (0, 1, 2,
+    # ...) as `layer_index`, needed only to tag this layer's
+    # DescriptionBox with which layer it is.
+    description_boxes: list[DescriptionBox] = []
     cumulative = Decimal(0)
-    for layer, (y_top, y_bot), placed in zip(pit.layers, bands, placed_descriptions):
+    for layer_index, (layer, (y_top, y_bot), placed) in enumerate(zip(pit.layers, bands, placed_descriptions)):
         cumulative += layer.thickness_in
         template = find_template(layer.name, templates)
         ax.add_patch(
@@ -826,6 +991,15 @@ def _draw_stratigraphy_column(ax, pit: TrialPit, scale: float, templates: list[U
         # Unit description, reflowed independently of the true-scale column.
         _draw_description_connector(ax, COLUMN_X + COLUMN_W, y_bot, placed.landing_y, placed.fontsize)
         _draw_description_block(ax, placed)
+        description_boxes.append(
+            DescriptionBox(
+                layer_index=layer_index,
+                x=LABEL_X,
+                y=placed.block_top_y,
+                width=MAIN_ZONE_RIGHT - LABEL_X,
+                height=len(placed.lines) * line_height_in(placed.fontsize),
+            )
+        )
 
     ax.add_patch(
         Rectangle(
@@ -862,6 +1036,8 @@ def _draw_stratigraphy_column(ax, pit: TrialPit, scale: float, templates: list[U
         ha="left",
     )
 
+    return description_boxes
+
 
 def _fmt(value: str) -> str:
     """Fallback text for any blank project-info field, so an unfilled
@@ -891,26 +1067,52 @@ def _wrap_lines(text: str, width: int) -> str:
     )
 
 
-def _draw_general_notes(ax, project: Project, pit: TrialPit) -> None:
+def _draw_general_notes(ax, project: Project, pit: TrialPit) -> list[FieldBox]:
     """The "NOTES:" box at the bottom-left of the page: standard
     boilerplate sentences with a few project-specific blanks filled in
     (equipment, date, file reference, groundwater, whether this pit struck
     true bedrock -- see _bedrock_note), plus one optional extra note
-    appended as its own numbered point."""
+    appended as its own numbered point.
+
+    Every {placeholder} that maps to a real ProjectInfo field is resolved
+    via resolve_field, not read straight off project.info, so a per-pit
+    override from the click-to-edit overlay (see webapp/app.py) shows up
+    here without this function needing to know whether that override
+    exists."""
+    equipment = resolve_field(project, pit, "equipment")
+    equipment_provider = resolve_field(project, pit, "equipment_provider")
     text = GENERAL_NOTES_BOILERPLATE.format(
-        equipment_note=_equipment_note(project.info, template="TRIAL PIT EXCAVATED WITH A {equipment} SUPPLIED BY {equipment_provider}."),
-        date=_fmt(project.info.site_work_completion_date).upper(),
-        file_ref=_fmt(project.info.file_ref).upper(),
+        equipment_note=_equipment_note(equipment, equipment_provider, template="TRIAL PIT EXCAVATED WITH A {equipment} SUPPLIED BY {equipment_provider}."),
+        ground_levels_note=resolve_field(project, pit, "ground_levels_note").upper(),
+        date=_fmt(resolve_field(project, pit, "site_work_completion_date")).upper(),
+        file_ref=_fmt(resolve_field(project, pit, "file_ref")).upper(),
         groundwater_note=_groundwater_note(pit, verb="DURING"),
         bedrock_note=_bedrock_note(pit),
     )
     if pit.extra_note:
-        text += f"\n{len(text.splitlines()) + 1}) {pit.extra_note}"
-    text = _wrap_lines(text, width=105)
-    draw_box(
-        ax, MARGIN, MARGIN, MAIN_ZONE_RIGHT - MARGIN, GENERAL_NOTES_HEIGHT, "NOTES:", text,
-        fontsize=GENERAL_NOTES_FONTSIZE, linespacing=GENERAL_NOTES_LINESPACING,
+        # .upper(): every other line in this box is already all-caps
+        # (either a fixed literal or upper-cased at its own .format()
+        # slot above) -- extra_note is free text typed into the input
+        # spreadsheet or the web UI's click-to-edit popup in whatever
+        # case the user happened to type, so it needs the same treatment
+        # here to match. The *stored* value stays exactly as typed (see
+        # resolve_field/webapp's _current_field_value, and report_io.py's
+        # own 1:1 use of this same field) -- only this drawing's own
+        # rendered text is forced to caps.
+        text += f"\n{len(text.splitlines()) + 1}) {pit.extra_note.upper()}"
+    # Wrapped and drawn one line at a time (see _fit_box_text/
+    # _draw_notes_body), not via draw_box's own body_text param, so a
+    # long extra_note automatically shrinks the fontsize instead of
+    # spilling past the box's fixed GENERAL_NOTES_HEIGHT.
+    lines, fontsize = _fit_box_text(
+        text, wrap_width=105, fontsize_default=GENERAL_NOTES_FONTSIZE,
+        available_height=GENERAL_NOTES_HEIGHT - BOX_LABEL_PAD - BOX_LABEL_LINE_GAP,
     )
+    boxes: list[FieldBox] = []
+    box_x, box_y, box_w, box_h = MARGIN, MARGIN, MAIN_ZONE_RIGHT - MARGIN, GENERAL_NOTES_HEIGHT
+    _draw_tracked_box(boxes, "general_notes", ax, box_x, box_y, box_w, box_h, "NOTES:")
+    _draw_notes_body(ax, box_x + 0.05, box_y + box_h - BOX_LABEL_PAD - BOX_LABEL_LINE_GAP, lines, fontsize)
+    return boxes
 
 
 @lru_cache(maxsize=8)
@@ -947,7 +1149,7 @@ def _load_rgb_image(path: Path) -> np.ndarray:
 
 def _draw_title_block(
     ax, project: Project, pit: TrialPit | None, cfg: Config, *, title_text: str | None = None, include_notes: bool = True
-) -> None:
+) -> list[FieldBox]:
     """The stack of labelled boxes down the right side of the page (NOTES,
     PROJECT, TITLE, DRAWN BY, SCALE, FILE, and the logo) -- drawn one
     explicit draw_box() call at a time, stacking each box directly below
@@ -972,22 +1174,31 @@ def _draw_title_block(
 
     if include_notes:
         notes_text = TITLE_BLOCK_NOTES_BOILERPLATE.format(
-            equipment_note=_equipment_note(project.info, template="TRIAL PITS EXCAVATED WITH A {equipment}."),
-            date=_fmt(project.info.site_work_completion_date).upper(),
-            file_ref=_fmt(project.info.file_ref).upper(),
+            equipment_note=_equipment_note(
+                resolve_field(project, pit, "equipment"), resolve_field(project, pit, "equipment_provider"),
+                template="TRIAL PITS EXCAVATED WITH A {equipment}.",
+            ),
+            date=_fmt(resolve_field(project, pit, "site_work_completion_date")).upper(),
+            file_ref=_fmt(resolve_field(project, pit, "file_ref")).upper(),
             groundwater_note=_groundwater_note(pit, verb="THROUGHOUT"),
             wall_stability_note=_wall_stability_note(pit),
         )
-        notes_text = _wrap_lines(notes_text, width=48)
+    project_name = resolve_field(project, pit, "project_name")
+    street_address = resolve_field(project, pit, "street_address")
+    block_and_parcel = resolve_field(project, pit, "block_and_parcel")
     project_text = _wrap_lines(
-        "\n".join(filter(None, [project.info.project_name, project.info.street_address, project.info.block_and_parcel])) or "-",
+        "\n".join(filter(None, [project_name, street_address, block_and_parcel])) or "-",
         width=38,
     )
     if title_text is None:
         title_text = f"TRIAL PIT NO. {pit.number}"
-    drawn_by_text = project.info.drawn_by
-    scale_text = project.info.scale_note
-    file_text = _fmt(project.info.file_ref)
+    # .upper(): same reasoning as extra_note in _draw_general_notes above
+    # -- these are free text (typed into the spreadsheet or the web UI's
+    # click-to-edit popup), and every other box on this drawing is
+    # all-caps, but the *stored* value stays exactly as typed.
+    drawn_by_text = resolve_field(project, pit, "drawn_by").upper()
+    scale_text = resolve_field(project, pit, "scale_note").upper()
+    file_text = _fmt(resolve_field(project, pit, "file_ref")).upper()
 
     # Fixed-height boxes -- each holds one short, unwrapped value rather
     # than a paragraph, so its height doesn't need to depend on the text
@@ -1009,20 +1220,30 @@ def _draw_title_block(
     # Walk down from the top of the page, placing each box directly below
     # the previous one -- `y -= height` before drawing means each box's
     # top edge sits exactly where the previous box's bottom edge was.
+    boxes: list[FieldBox] = []
     y = top_y
     if include_notes:
         y -= notes_h
-        draw_box(ax, x, y, w, notes_h, "NOTES:", notes_text, fontsize=TITLE_BLOCK_NOTES_FONTSIZE, linespacing=TITLE_BLOCK_NOTES_LINESPACING)
+        # Same shrink-to-fit treatment as the general notes box (see
+        # _draw_general_notes) -- notes_h is dynamic (see remaining_height/
+        # notes_h above), but still a fixed, known height by the time the
+        # text actually needs to fit inside it.
+        notes_lines, notes_fontsize = _fit_box_text(
+            notes_text, wrap_width=48, fontsize_default=TITLE_BLOCK_NOTES_FONTSIZE,
+            available_height=notes_h - BOX_LABEL_PAD - BOX_LABEL_LINE_GAP,
+        )
+        _draw_tracked_box(boxes, "title_notes", ax, x, y, w, notes_h, "NOTES:")
+        _draw_notes_body(ax, x + 0.05, y + notes_h - BOX_LABEL_PAD - BOX_LABEL_LINE_GAP, notes_lines, notes_fontsize)
     y -= project_h
-    draw_box(ax, x, y, w, project_h, "PROJECT:", f"GEOTECHNICAL INVESTIGATION\n{project_text.upper()}", fontsize=TITLE_BLOCK_PROJECT_FONTSIZE, linespacing=TITLE_BLOCK_PROJECT_LINESPACING)
+    _draw_tracked_box(boxes, "project", ax, x, y, w, project_h, "PROJECT:", f"GEOTECHNICAL INVESTIGATION\n{project_text.upper()}", fontsize=TITLE_BLOCK_PROJECT_FONTSIZE, linespacing=TITLE_BLOCK_PROJECT_LINESPACING)
     y -= title_h
-    draw_box(ax, x, y, w, title_h, "TITLE:", title_text, fontsize=TITLE_BLOCK_TITLE_FONTSIZE, linespacing=TITLE_BLOCK_TITLE_LINESPACING)
+    _draw_tracked_box(boxes, "title", ax, x, y, w, title_h, "TITLE:", title_text, fontsize=TITLE_BLOCK_TITLE_FONTSIZE, linespacing=TITLE_BLOCK_TITLE_LINESPACING)
     y -= drawn_by_h
-    draw_box(ax, x, y, w, drawn_by_h, "DRAWN BY:", drawn_by_text, fontsize=TITLE_BLOCK_DRAWN_BY_FONTSIZE, linespacing=TITLE_BLOCK_DRAWN_BY_LINESPACING)
+    _draw_tracked_box(boxes, "drawn_by", ax, x, y, w, drawn_by_h, "DRAWN BY:", drawn_by_text, fontsize=TITLE_BLOCK_DRAWN_BY_FONTSIZE, linespacing=TITLE_BLOCK_DRAWN_BY_LINESPACING)
     y -= scale_h
-    draw_box(ax, x, y, w, scale_h, "SCALE:", scale_text, fontsize=TITLE_BLOCK_SCALE_FONTSIZE, linespacing=TITLE_BLOCK_SCALE_LINESPACING)
+    _draw_tracked_box(boxes, "scale", ax, x, y, w, scale_h, "SCALE:", scale_text, fontsize=TITLE_BLOCK_SCALE_FONTSIZE, linespacing=TITLE_BLOCK_SCALE_LINESPACING)
     y -= file_h
-    draw_box(ax, x, y, w, file_h, "FILE:", file_text, fontsize=TITLE_BLOCK_FILE_FONTSIZE, linespacing=TITLE_BLOCK_FILE_LINESPACING)
+    _draw_tracked_box(boxes, "file", ax, x, y, w, file_h, "FILE:", file_text, fontsize=TITLE_BLOCK_FILE_FONTSIZE, linespacing=TITLE_BLOCK_FILE_LINESPACING)
 
     y -= logo_h
     ax.add_patch(Rectangle((x, y), w, logo_h, fill=False, edgecolor="black", linewidth=0.8))
@@ -1057,6 +1278,7 @@ def _draw_title_block(
             linewidth=TITLE_BLOCK_BORDER_LINEWIDTH,
         )
     )
+    return boxes
 
 
 def _draw_page_border(ax, cfg: Config) -> None:
@@ -1075,18 +1297,38 @@ def _draw_page_border(ax, cfg: Config) -> None:
     )
 
 
-def render_pit_page(fig, ax, project: Project, pit: TrialPit, cfg: Config, scale: float, templates: list[UnitTemplate]) -> None:
+@dataclass
+class PitBoxes:
+    """Every click-to-edit region on one rendered pit page, grouped by
+    kind: `descriptions` (one per soil layer, see DescriptionBox) and
+    `fields` (one per labelled box -- NOTES, PROJECT, TITLE, DRAWN BY,
+    SCALE, FILE -- see FieldBox). Kept as two separate lists rather than
+    one combined one since the webapp handles the two kinds differently
+    (a description edit always writes to exactly this pit's layer; a
+    field edit can be global or pit-specific, see webapp/app.py's
+    FIELD_BOX_SPECS and update_fields route)."""
+
+    descriptions: list[DescriptionBox]
+    fields: list[FieldBox]
+
+
+def render_pit_page(fig, ax, project: Project, pit: TrialPit, cfg: Config, scale: float, templates: list[UnitTemplate]) -> PitBoxes:
     """Assembles one complete page for one pit: the outer page border,
     then the three major regions (stratigraphy column, general notes,
     title block), each delegated to its own _draw_xxx function above.
     `fig` is accepted alongside `ax` purely so this function's signature
     mirrors _new_axes's (fig, ax) return pair -- everything actually
     drawn here goes through `ax`, since matplotlib artists are added to
-    an axes, not a figure, directly."""
+    an axes, not a figure, directly.
+
+    Returns every _draw_xxx function's own click-to-edit boxes bundled
+    into a PitBoxes -- every other caller (render_project's multi-page
+    loop) just discards it, but render_pit_pdf below needs it to support
+    the webapp's click-to-edit preview overlay."""
     _draw_page_border(ax, cfg)
-    _draw_stratigraphy_column(ax, pit, scale, templates)
-    _draw_general_notes(ax, project, pit)
-    _draw_title_block(ax, project, pit, cfg)
+    description_boxes = _draw_stratigraphy_column(ax, pit, scale, templates)
+    field_boxes = _draw_general_notes(ax, project, pit) + _draw_title_block(ax, project, pit, cfg)
+    return PitBoxes(descriptions=description_boxes, fields=field_boxes)
 
 
 def render_location_plan_page(fig, ax, project: Project, cfg: Config) -> None:
@@ -1126,7 +1368,7 @@ def compute_project_scale(project: Project) -> float:
 def render_pit_pdf(
     project: Project, pit: TrialPit, cfg: Config, scale: float,
     templates: list[UnitTemplate], output_path: str | Path,
-) -> None:
+) -> PitBoxes:
     """Render exactly one pit's page to its own single-page PDF file --
     everything render_project's per-pit loop does for one iteration, but
     standalone rather than appended into one shared multi-page PDF.
@@ -1143,11 +1385,16 @@ def render_pit_pdf(
     project (see compute_project_scale above) -- passing it in rather
     than recomputing it here is what keeps this pit's column drawn at the
     same scale as its neighbors, even though this function never looks at
-    those neighbors itself."""
+    those neighbors itself.
+
+    Returns this page's PitBoxes (page-inches, y-up) so the webapp can
+    turn it into the click-to-edit overlay's coordinate map -- see
+    webapp/app.py's _render_and_rasterize_pit."""
     fig, ax = _new_axes(cfg)
-    render_pit_page(fig, ax, project, pit, cfg, scale, templates)
+    boxes = render_pit_page(fig, ax, project, pit, cfg, scale, templates)
     fig.savefig(output_path)
     plt.close(fig)
+    return boxes
 
 
 def render_location_plan_pdf(project: Project, cfg: Config, output_path: str | Path) -> None:

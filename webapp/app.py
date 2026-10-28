@@ -28,6 +28,7 @@ import re
 import time
 import uuid
 import zipfile
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 import pymupdf
@@ -36,13 +37,14 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 
 from tp_drawer.catalog import UnitTemplate, hydrate_descriptions, load_catalog, load_formation_catalog, load_foundation_catalog, save_catalog
 from tp_drawer.config import Config
-from tp_drawer.drawing import compute_project_scale, render_hatch_swatch, render_location_plan_pdf, render_pit_pdf
+from tp_drawer.drawing import DescriptionBox, FieldBox, PitBoxes, compute_project_scale, render_hatch_swatch, render_location_plan_pdf, render_pit_pdf, resolve_field
 from tp_drawer.excel_io import read_project, write_template
 from tp_drawer.hatch_patterns import PATTERN_REGISTRY
-from tp_drawer.models import Project, project_from_dict, project_to_dict
+from tp_drawer.models import Project, TrialPit, project_from_dict, project_to_dict
 from tp_drawer.pdf_convert import convert_to_pdf
 from tp_drawer.photo_gallery_io import generate_appendix_b, is_image_file
 from tp_drawer.report_io import build_report_context, generate_report, render_docx_template
+from tp_drawer.units import format_feet_inches, parse_feet_inches
 
 APPENDIX_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "data"
 APPENDIX_LETTERS = ("a", "b", "c", "d")
@@ -93,8 +95,97 @@ def _export_basename(project: Project) -> str:
 # before the value ever reaches a filesystem path. _OUTPUT_FILENAME_RE
 # below does the same job for the filename half of that route.
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-_OUTPUT_FILENAME_RE = re.compile(r"^(log\.pdf|pit_\d+\.png)$")
+_OUTPUT_FILENAME_RE = re.compile(r"^(log\.pdf|pit_\d+\.png|pit_\d+_boxes\.json|pit_\d+_fields\.json)$")
 _PREVIEW_DPI = 150
+
+# Every click-to-edit FieldBox tp_drawer.drawing produces is tagged with a
+# `box_id` (see FieldBox's own docstring); this registry is the other
+# half of that contract -- for each box_id, which underlying field(s) a
+# click on that box should let someone edit, what to label each one, and
+# what kind of input control it needs ("text": a plain text field;
+# "yesno": a Yes/No select, for pit.walls_stable; "depth": a feet-inches
+# text field parsed/formatted via tp_drawer.units, for
+# pit.groundwater_depth_in, where a blank value means "not encountered").
+#
+# Each field's key is "project:<attr>" (a shared ProjectInfo attribute --
+# see tp_drawer.drawing.resolve_field -- editable either globally or, via
+# TrialPit.field_overrides, for one pit only) or "pit:<attr>" (a
+# TrialPit attribute with no shared/override split of its own -- editing
+# it "globally" here instead means writing the same value onto every
+# pit directly, see update_fields below).
+FIELD_BOX_SPECS: dict[str, list[tuple[str, str, str]]] = {
+    "general_notes": [
+        ("project:equipment", "Equipment", "text"),
+        ("project:equipment_provider", "Equipment Provider", "text"),
+        ("project:ground_levels_note", "Ground Levels Note", "text"),
+        ("project:site_work_completion_date", "Site Work Completion Date", "text"),
+        ("project:file_ref", "File Reference", "text"),
+        ("pit:groundwater_depth_in", "Groundwater Depth (blank = not encountered)", "depth"),
+        ("pit:termination_reason", "Final Formation / Termination Reason", "text"),
+        ("pit:extra_note", "Extra Note", "text"),
+    ],
+    "title_notes": [
+        ("project:equipment", "Equipment", "text"),
+        ("project:equipment_provider", "Equipment Provider", "text"),
+        ("project:site_work_completion_date", "Site Work Completion Date", "text"),
+        ("project:file_ref", "File Reference", "text"),
+        ("pit:groundwater_depth_in", "Groundwater Depth (blank = not encountered)", "depth"),
+        ("pit:walls_stable", "Pit Walls Stable", "yesno"),
+    ],
+    "project": [
+        ("project:project_name", "Project Name", "text"),
+        ("project:street_address", "Street Address", "text"),
+        ("project:block_and_parcel", "Block and Parcel", "text"),
+    ],
+    "title": [
+        ("pit:number", "Pit Number", "text"),
+    ],
+    "drawn_by": [
+        ("project:drawn_by", "Drawn By", "text"),
+    ],
+    "scale": [
+        ("project:scale_note", "Scale", "text"),
+    ],
+    "file": [
+        ("project:file_ref", "File Reference", "text"),
+    ],
+}
+
+
+# Every "pit:<attr>" key that appears anywhere in FIELD_BOX_SPECS above --
+# validated against on the way into update_fields below so a malformed
+# field_key can't setattr() an arbitrary, unintended TrialPit attribute.
+_KNOWN_PIT_FIELDS = {key.split(":", 1)[1] for specs in FIELD_BOX_SPECS.values() for key, _, _ in specs if key.startswith("pit:")}
+
+
+def _current_field_value(project: Project, pit: TrialPit, attr: str, *, is_project_field: bool) -> str:
+    """The text a field's input box should be pre-filled with -- resolved
+    through field_overrides for a "project:"-prefixed field (see
+    resolve_field), or read straight off the pit for a "pit:"-prefixed
+    one, with type-aware formatting for the two pit attributes that
+    aren't already plain strings (groundwater_depth_in, walls_stable)."""
+    if is_project_field:
+        return resolve_field(project, pit, attr)
+    value = getattr(pit, attr)
+    if attr == "groundwater_depth_in":
+        return format_feet_inches(value) if value is not None else ""
+    if attr == "walls_stable":
+        return "yes" if value else "no"
+    return str(value)
+
+
+def _convert_pit_field(attr: str, raw_value: str) -> object:
+    """Parses one "pit:"-prefixed field's raw string from the click-to-edit
+    popup back into the type TrialPit actually stores it as. Letting
+    parse_feet_inches raise ValueError on unparseable text is deliberate --
+    update_fields below catches it the same way it catches every other
+    malformed-request error."""
+    if attr == "groundwater_depth_in":
+        text = raw_value.strip()
+        return parse_feet_inches(text, context="click-to-edit groundwater depth") if text else None
+    if attr == "walls_stable":
+        return raw_value.strip().lower() in ("yes", "true", "1")
+    return raw_value.strip()
 
 # ADVANCED TECHNIQUE -- Flask's `app` object and decorators:
 # `app` is the running web application itself; every `@app.route(...)`
@@ -154,19 +245,94 @@ def _pit_pdf_path(job_dir: Path, pit_index: int) -> Path:
     return job_dir / f"pit_{pit_index}.pdf"
 
 
-def _render_and_rasterize_pit(job_dir: Path, project: Project, scale: float, templates: list[UnitTemplate], pit_index: int) -> None:
-    """Regenerate exactly one pit's own PDF page and PNG preview -- the
-    only rendering work a single description edit actually needs, since
-    editing one layer's text can only ever change that one pit's page.
+def _description_boxes_path(job_dir: Path, pit_index: int) -> Path:
+    """Where one pit's click-to-edit coordinate map lives -- see
+    _save_description_boxes below."""
+    return job_dir / f"pit_{pit_index}_boxes.json"
 
-    render_pit_pdf (from tp_drawer.drawing) draws just this pit; pymupdf
-    then re-rasterizes that one-page PDF into a plain PNG image the same
-    way the old whole-project version did, just for one page instead of
-    every page (see render_pit_pdf's own docstring for why re-drawing
-    every other pit here would be wasted work)."""
+
+def _save_description_boxes(job_dir: Path, pit_index: int, boxes: list[DescriptionBox], cfg: Config) -> None:
+    """Persists one pit's DescriptionBox list (page-inches, y-up from the
+    bottom -- see tp_drawer.drawing.DescriptionBox's own docstring) as
+    fractions of the page's own width/height (0-1, y-down from the top --
+    a browser positions an element over an <img> the same way, via CSS
+    percentages), so the edit page's click-to-edit overlay can position a
+    clickable region over the preview image without caring what pixel
+    size that image actually got rasterized at."""
+    page_w, page_h = cfg.page_size_in
+    payload = [
+        {
+            "layer_index": box.layer_index,
+            "x": box.x / page_w,
+            "y": (page_h - box.y) / page_h,
+            "width": box.width / page_w,
+            "height": box.height / page_h,
+        }
+        for box in boxes
+    ]
+    _description_boxes_path(job_dir, pit_index).write_text(json.dumps(payload))
+
+
+def _field_boxes_path(job_dir: Path, pit_index: int) -> Path:
+    """Where one pit's field-editing coordinate map lives -- the
+    "everything else" counterpart to _description_boxes_path above, for
+    the NOTES/PROJECT/TITLE/DRAWN BY/SCALE/FILE boxes rather than
+    per-layer descriptions."""
+    return job_dir / f"pit_{pit_index}_fields.json"
+
+
+def _save_field_boxes(job_dir: Path, pit_index: int, project: Project, pit: TrialPit, boxes: list[FieldBox], cfg: Config) -> None:
+    """Persists one pit's FieldBox list the same way _save_description_boxes
+    persists DescriptionBoxes (page-inches, y-up -> fractions of the
+    page, y-down from the top), plus each box's own field metadata from
+    FIELD_BOX_SPECS (label, input kind, and current value) so the edit
+    page's popup can build its inputs without a separate request."""
+    page_w, page_h = cfg.page_size_in
+    payload = []
+    for box in boxes:
+        fields = [
+            {
+                "key": key,
+                "label": label,
+                "kind": kind,
+                "value": _current_field_value(project, pit, key.split(":", 1)[1], is_project_field=key.startswith("project:")),
+            }
+            for key, label, kind in FIELD_BOX_SPECS.get(box.box_id, [])
+        ]
+        payload.append(
+            {
+                "box_id": box.box_id,
+                "x": box.x / page_w,
+                "y": (page_h - box.y) / page_h,
+                "width": box.width / page_w,
+                "height": box.height / page_h,
+                "fields": fields,
+            }
+        )
+    _field_boxes_path(job_dir, pit_index).write_text(json.dumps(payload))
+
+
+def _render_and_rasterize_pit(job_dir: Path, project: Project, scale: float, templates: list[UnitTemplate], pit_index: int) -> None:
+    """Regenerate exactly one pit's own PDF page, PNG preview, and
+    click-to-edit coordinate map -- the only rendering work a single
+    description edit actually needs, since editing one layer's text can
+    only ever change that one pit's page (note: a long description can
+    also push its *neighbors'* description blocks around via
+    description_layout.py's reflow logic, which is exactly why this
+    re-saves every layer's box on this pit, not just the edited one).
+
+    render_pit_pdf (from tp_drawer.drawing) draws just this pit and
+    returns where each layer's description block ended up; pymupdf then
+    re-rasterizes that one-page PDF into a plain PNG image the same way
+    the old whole-project version did, just for one page instead of every
+    page (see render_pit_pdf's own docstring for why re-drawing every
+    other pit here would be wasted work)."""
     pit = project.pits[pit_index]
     pdf_path = _pit_pdf_path(job_dir, pit_index)
-    render_pit_pdf(project, pit, Config(), scale, templates, pdf_path)
+    cfg = Config()
+    boxes = render_pit_pdf(project, pit, cfg, scale, templates, pdf_path)
+    _save_description_boxes(job_dir, pit_index, boxes.descriptions, cfg)
+    _save_field_boxes(job_dir, pit_index, project, pit, boxes.fields, cfg)
     doc = pymupdf.open(pdf_path)
     doc[0].get_pixmap(dpi=_PREVIEW_DPI).save(job_dir / f"pit_{pit_index}.png")
     doc.close()
@@ -287,7 +453,8 @@ def edit(job_id: str):
     Project object straight to the template) so the HTML template only
     ever has to deal with simple, predictable data -- each pit's number,
     its index (used by edit_update below to know which pit a later edit
-    belongs to), its layers, and the URL of its preview image."""
+    belongs to), its layers, the URL of its preview image, and the URL of
+    its click-to-edit coordinate map (see _save_description_boxes)."""
     job_dir = _require_job_dir(job_id)
     project = _load_project(job_dir)
     pits = [
@@ -296,6 +463,8 @@ def edit(job_id: str):
             "pit_index": i,
             "layers": [{"layer_index": j, "name": layer.name, "description": layer.description} for j, layer in enumerate(pit.layers)],
             "image_url": url_for("job_file", job_id=job_id, filename=f"pit_{i}.png"),
+            "boxes_url": url_for("job_file", job_id=job_id, filename=f"pit_{i}_boxes.json"),
+            "fields_url": url_for("job_file", job_id=job_id, filename=f"pit_{i}_fields.json"),
         }
         for i, pit in enumerate(project.pits)
     ]
@@ -364,7 +533,96 @@ def edit_update(job_id: str):
     # forcing it to fetch the actual latest image.
     cache_bust = int(time.time() * 1000)
     image_url = f"{url_for('job_file', job_id=job_id, filename=f'pit_{pit_index}.png')}?v={cache_bust}"
-    return jsonify({"pit_index": pit_index, "image_url": image_url})
+    # A long description can push its *neighbors'* description blocks
+    # around too (see description_layout.py's reflow logic), so the
+    # click-to-edit overlay needs every layer's box re-fetched after any
+    # edit to this pit, not just the one that was just edited -- same
+    # cache-busting reasoning as image_url above.
+    boxes_url = f"{url_for('job_file', job_id=job_id, filename=f'pit_{pit_index}_boxes.json')}?v={cache_bust}"
+    return jsonify({"pit_index": pit_index, "image_url": image_url, "boxes_url": boxes_url})
+
+
+def _pit_urls(job_id: str, pit_index: int, cache_bust: int) -> dict:
+    """The same cache-busted image/boxes/fields URL triple for one pit,
+    shared by update_fields below -- a "global" field edit re-renders
+    every pit at once, so this needs to be built once per affected pit
+    rather than just the one edit_update above ever had to handle."""
+    return {
+        "pit_index": pit_index,
+        "image_url": f"{url_for('job_file', job_id=job_id, filename=f'pit_{pit_index}.png')}?v={cache_bust}",
+        "boxes_url": f"{url_for('job_file', job_id=job_id, filename=f'pit_{pit_index}_boxes.json')}?v={cache_bust}",
+        "fields_url": f"{url_for('job_file', job_id=job_id, filename=f'pit_{pit_index}_fields.json')}?v={cache_bust}",
+    }
+
+
+@app.route("/edit/<job_id>/update_fields", methods=["POST"])
+def edit_update_fields(job_id: str):
+    """Called by the edit page's click-to-edit popup for every box other
+    than a layer description (NOTES, PROJECT, TITLE, DRAWN BY, SCALE,
+    FILE -- see FIELD_BOX_SPECS): applies one or more field edits to
+    either just the clicked pit ("pit" scope) or every pit in the project
+    ("global" scope), then re-renders whichever pit(s) that touched.
+
+    request body: {"pit_index": int, "scope": "pit"|"global",
+    "values": {field_key: str}}, where each field_key is one of
+    FIELD_BOX_SPECS's own "project:<attr>"/"pit:<attr>" keys.
+
+    A "project:" field writes straight to project.info on a "global" edit
+    (clearing every pit's own override for it, so the new shared value
+    isn't immediately masked again -- see resolve_field), or into just
+    this pit's field_overrides on a "pit" edit. A "pit:" field writes
+    directly onto every pit ("global") or just this one ("pit") -- there's
+    no shared/override split for these, since they're TrialPit's own
+    attributes rather than a ProjectInfo field being shadowed."""
+    job_dir = _require_job_dir(job_id)
+    body = request.get_json(silent=True) or {}
+    try:
+        pit_index = int(body["pit_index"])
+        scope = str(body["scope"])
+        values = dict(body["values"])
+        if scope not in ("pit", "global"):
+            raise ValueError("scope must be 'pit' or 'global'")
+        if not values:
+            raise ValueError("no field values submitted")
+
+        project = _load_project(job_dir)
+        pit = project.pits[pit_index]  # IndexError -> caught below
+
+        for field_key, raw_value in values.items():
+            prefix, attr = str(field_key).split(":", 1)
+            raw_value = str(raw_value)
+            if prefix == "project":
+                if attr not in {f.name for f in dataclass_fields(type(project.info))}:
+                    raise ValueError(f"unknown project field {attr!r}")
+                value = raw_value.strip()
+                if scope == "global":
+                    setattr(project.info, attr, value)
+                    for other_pit in project.pits:
+                        other_pit.field_overrides.pop(attr, None)
+                else:
+                    pit.field_overrides[attr] = value
+            elif prefix == "pit":
+                if attr not in _KNOWN_PIT_FIELDS:
+                    raise ValueError(f"unknown pit field {attr!r}")
+                converted = _convert_pit_field(attr, raw_value)
+                targets = project.pits if scope == "global" else [pit]
+                for target in targets:
+                    setattr(target, attr, converted)
+            else:
+                raise ValueError(f"malformed field key {field_key!r}")
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        return jsonify({"error": f"Malformed update request: {exc}"}), 400
+
+    _save_project(job_dir, project)
+    templates = load_catalog()
+    scale = compute_project_scale(project)
+    affected_indices = range(len(project.pits)) if scope == "global" else [pit_index]
+    for i in affected_indices:
+        _render_and_rasterize_pit(job_dir, project, scale, templates, i)
+    _rebuild_combined_pdf(job_dir, project)
+
+    cache_bust = int(time.time() * 1000)
+    return jsonify({"pits": [_pit_urls(job_id, i, cache_bust) for i in affected_indices]})
 
 
 def _photo_dir(job_dir: Path) -> Path:
@@ -495,13 +753,14 @@ def export(job_id: str):
 
 @app.route("/outputs/<job_id>/<filename>")
 def job_file(job_id: str, filename: str):
-    """Serves one file out of a job's folder (a pit preview PNG, or --
-    though the edit page's own export dropdown downloads it by a nicer
-    name via /export/<job_id> instead -- the raw combined log.pdf).
-    Every image_url built above ultimately points here. Both URL parts
-    are validated against the regexes defined near the top of this file
-    before being used to build a filesystem path -- see the _JOB_ID_RE
-    comment above for why that matters."""
+    """Serves one file out of a job's folder (a pit preview PNG, its
+    click-to-edit coordinate map, or -- though the edit page's own export
+    dropdown downloads it by a nicer name via /export/<job_id> instead --
+    the raw combined log.pdf). Every image_url/boxes_url built above
+    ultimately points here. Both URL parts are validated against the
+    regexes defined near the top of this file before being used to build
+    a filesystem path -- see the _JOB_ID_RE comment above for why that
+    matters."""
     if not _JOB_ID_RE.match(job_id) or not _OUTPUT_FILENAME_RE.match(filename):
         abort(404)
     job_dir = _job_dir(job_id)
